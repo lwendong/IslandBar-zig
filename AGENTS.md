@@ -784,3 +784,25 @@ Windows 实机回归（操作 + 结果）：
 - **Windows 实机：** 修复后尚未重新运行 GUI；`WIN-UI-001` 仍为 `MANUAL_PENDING`。需要用户从本轮 `zig build run` 新启动一次，确认完整 UI 出现且不再产生 `tray_icons:0 / 0x80070057`。
 - **风险 / 未验证：** 编译确认了接口和参数类型，但不代替真实 D2D 绘制验收；如果仍失败，保留的 D2D tag 会指向新的失败绘制组。Renderer 格式化器的 `Unexpected` 原因尚未定位。
 - **回退方式：** 将 `drawPngIcon()` 与 `drawRgbaImage()` 的 DrawBitmap 插值实参恢复为原始值并移除此步常量；撤回 D2D tag/log 增量与此记录（若需要完整回到 UI-029，再按 UI-028 的步骤回退诊断/重试）。保留工作区其它变化，不重置用户数据。
+
+## UI-031 — 托盘与箭头底边对齐并缩小箭头
+
+- **日期 / 目标：** 2026-10-16；按用户截图反馈，让系统托盘图标靠底排列，并把最右侧箭头缩到托盘单项的尺寸。
+- **实现：** `TaskbarLayout` 统一用小控件几何：托盘点击槽与箭头按钮均为 24 DIP，底边与 38 DIP 任务按钮的底边对齐；16 DIP 托盘图形在槽内改为底边对齐。箭头绘制、命中和输入区域继续读取同一 `overflow_button_bounds`，避免视觉与命中几何分离。
+- **改动文件：** `island/src/features/taskbar/ui/Layout.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未改任务图标、托盘枚举/操作、箭头动作、任务间距、动画、绘制样式或架构文档状态；未新增或运行测试。
+- **自动验证：** `zig fmt --check src/features/taskbar/ui/Layout.zig` 退出码 0；首次默认构建因 Zig 安装目录不可访问而失败，进程设置 `ZIG_LIB_DIR=C:\Software\Loadout\store\zig\0.17.0\lib` 后在获准访问本机工具链/Windows SDK 的调用中执行 `zig build --summary all --cache-dir .zig-cache-ui-031`，退出码 0、16/16 steps（IslandBar、安装器及全部 smoke/probe）。`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增/移除/未解析；`git diff --check` 退出码 0。未运行测试。
+- **Windows 实机：** `WIN-TRAY-001` 加入托盘图形底边与任务按钮对齐、箭头 24 DIP 且与托盘槽等尺寸的核对；状态 `MANUAL_PENDING`，本轮未启动 GUI 验收。
+- **风险 / 未验证：** 几何编译通过但屏幕上的视觉底边、箭头可见度、24 DIP 点击体验及不同 DPI 尚未实测。
+- **回退方式：** 恢复 `overflowButtonFor()` 使用 `BarControlLayout.buttonAt()`，并恢复托盘槽/图形的垂直居中；撤回 `WIN-TRAY-001` 的尺寸与对齐验收补充以及本记录。保留 UI-025 的托盘接入和其他更改。
+
+## UI-032 — 溢出弹窗改为紧凑的隐藏托盘面板
+
+- **日期 / 目标：** 2026-10-16；按用户澄清，最右侧箭头打开的原任务溢出弹窗改为只展示隐藏的系统托盘图标；同时缩小弹窗，使弹窗图标与顶栏托盘图标同大。
+- **实现：** 顶栏显示被 Windows 提升显示且能取到 PNG 的托盘图标；箭头弹窗仅收纳隐藏/未提升的托盘图标，移除旧弹窗中的标题、系统/托盘入口和任务卡片绘制及点击路由；独立托盘页继续显示完整托盘目录。弹窗采用紧凑网格：24 DIP 图标槽、16 DIP 图像（与顶栏一致）、3 DIP 图标间距、8 DIP 面板内边距、14 DIP 圆角；最多 6 列并按显示器宽度收窄。托盘与箭头均为 24 DIP 并垂直居中；此前 UI-031 的底对齐按用户后续反馈被本次中心对齐覆盖。绘制诊断 tag 也改名为 `tray_overflow`。
+- **改动文件：** `island/src/app/main.zig`、`island/src/features/taskbar/ui/Layout.zig`、`island/src/features/taskbar/ui/Page.zig`、`island/src/ui/Renderer.zig`、`island/src/ui/TaskbarPresentation.zig`、`island/src/ui/TextRenderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未修改系统托盘目录枚举、图标身份和原生点击/菜单服务；独立托盘页与其完整列表保留；未改 Zig/Win32/D2D/DWrite/DComp 路线、安装器和 probe 目标。未新增或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt --check src/features/taskbar/ui/Layout.zig src/features/taskbar/ui/Page.zig src/ui/TaskbarPresentation.zig src/ui/TextRenderer.zig` 退出码 0；设置进程级 `ZIG_LIB_DIR=C:\Software\Loadout\store\zig\0.17.0\lib` 后执行 `zig build --summary all`，退出码 0、16/16 steps（IslandBar、安装器和既有 smoke/probe）；`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增/移除/未解析；`git diff --check` 退出码 0。未运行测试。
+- **Windows 实机：** `WIN-TRAY-001` 补充检查弹窗只含隐藏托盘图标、图标为 16 DIP、紧凑间距、托盘槽/箭头垂直居中；状态仍为 `MANUAL_PENDING`，本轮未启动 GUI。
+- **风险 / 未验证：** Windows 原生界面、不同 DPI、托盘图标过多时的网格视觉均未实测。任务组超出顶栏可用宽度时，箭头不再承载任务卡片；超过可见容量的任务需要后续单独确定呈现方式。
+- **回退方式：** 如需撤回本步骤，将箭头展开状态、布局、命中和渲染恢复到原任务溢出面板字段/函数，并恢复其 TextRenderer 标题、入口和任务卡片；恢复 Renderer 旧 tag 名与 `PillAppearance` 字段、App 中旧入口点击路由及对应图标缓存容量；撤回本步骤对 `WIN-TRAY-001` 的补充和本记录。保留 UI-025 的系统托盘接入和既有工作区变化。

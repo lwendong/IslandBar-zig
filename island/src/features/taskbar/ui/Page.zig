@@ -117,7 +117,11 @@ fn buildDockViewInternal(
         hover_progresses[index] = progress;
         requested_extra_total += (Layout.task_icon_hover_width_dip - Layout.task_icon_button_dip) * progress;
     }
-    const tray_count = Layout.trayIconsThatFitForMonitor(monitor_width_dip, visible, tray_input.len);
+    var promoted_tray_count: usize = 0;
+    for (tray_input) |icon| if (icon.promoted) {
+        promoted_tray_count += 1;
+    };
+    const tray_count = Layout.trayIconsThatFitForMonitor(monitor_width_dip, visible, promoted_tray_count);
     const tray_width = @as(f32, @floatFromInt(tray_count)) * Layout.tray_icon_button_dip +
         @as(f32, @floatFromInt(if (tray_count > 0) tray_count - 1 else 0)) * Layout.tray_icon_gap_dip;
     const reserved_width = base_row_width + tray_width + (if (tray_count > 0 and visible > 0) Layout.task_tray_gap_dip else 0);
@@ -127,8 +131,8 @@ fn buildDockViewInternal(
         .catalog_revision = catalog_revision,
         .island = island,
         .count = visible,
-        .overflow_count = total - visible,
-        .overflow_open = overflow_open,
+        .hidden_task_count = total - visible,
+        .tray_overflow_open = overflow_open,
         .tray_count = tray_count,
     };
     var next_left = island.rect.right + Layout.task_icon_pad_dip;
@@ -151,9 +155,11 @@ fn buildDockViewInternal(
         view.task_row_bounds.right + Layout.task_tray_gap_dip
     else
         island.rect.right + Layout.task_icon_pad_dip;
-    for (tray_input[0..tray_count], 0..) |source, index| {
+    var inline_tray_count: usize = 0;
+    for (tray_input) |source| {
+        if (!source.promoted or inline_tray_count >= tray_count) continue;
         const bounds = Layout.trayIconButtonAt(island, tray_left);
-        view.tray_icons[index] = .{
+        view.tray_icons[inline_tray_count] = .{
             .png = source.png,
             .source_index = source.source_index,
             .fingerprint = source.fingerprint,
@@ -163,22 +169,34 @@ fn buildDockViewInternal(
         };
         view.row_bounds = unionBounds(view.row_bounds, bounds);
         tray_left = bounds.right + Layout.tray_icon_gap_dip;
+        inline_tray_count += 1;
     }
     const row_right = if (view.row_bounds.right > view.row_bounds.left) view.row_bounds.right else island.rect.right;
     view.overflow_button_bounds = Layout.overflowButtonFor(island, row_right);
-    const overflow_layout = Layout.overflowLayoutFor(island, view.overflow_button_bounds, monitor_width_dip, total - visible);
-    view.overflow_bounds = overflow_layout.panel;
-    view.system_entry_bounds = overflow_layout.system_entry;
-    view.tray_entry_bounds = overflow_layout.tray_entry;
-    for (input[visible..total], 0..) |source, index| {
-        var button = source;
-        button.hover_progress = 0;
-        button.bounds = Layout.overflowTaskButtonAt(overflow_layout, index);
-        button.icon_bounds = Layout.overflowTaskIconInBox(button.bounds);
-        button.title_bounds = Layout.overflowTaskTitleAt(button.bounds);
-        view.overflow_buttons[index] = button;
+    var hidden_tray_count: usize = 0;
+    for (tray_input) |source| {
+        if (source.promoted and inline_tray_count > 0) {
+            inline_tray_count -= 1;
+            continue;
+        }
+        if (hidden_tray_count >= view.tray_overflow_icons.len) break;
+        view.tray_overflow_icons[hidden_tray_count] = .{
+            .png = source.png,
+            .source_index = source.source_index,
+            .fingerprint = source.fingerprint,
+            .revision = tray_catalog_revision,
+        };
+        hidden_tray_count += 1;
     }
-    if (!overflow_open) view.overflow_bounds.rect = .{};
+    view.tray_overflow_count = hidden_tray_count;
+    const overflow_layout = Layout.trayOverflowLayoutFor(island, view.overflow_button_bounds, monitor_width_dip, hidden_tray_count);
+    view.tray_overflow_bounds = overflow_layout.panel;
+    for (view.tray_overflow_icons[0..hidden_tray_count], 0..) |*icon, index| {
+        icon.bounds = Layout.trayOverflowCellAt(overflow_layout, index);
+        icon.icon_bounds = Layout.trayOverflowIconInBox(icon.bounds);
+    }
+    for (input[visible..total], 0..) |source, index| view.hidden_task_ids[index] = source.window_id;
+    if (!overflow_open or hidden_tray_count == 0) view.tray_overflow_bounds.rect = .{};
     return view;
 }
 
@@ -193,12 +211,16 @@ pub fn applyHorizontalOffset(view: *View, window_id: Catalog.WindowId, offset_x:
         view.row_bounds = unionBounds(view.row_bounds, button.bounds);
         return true;
     }
-    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| {
-        if (button.window_id != window_id) continue;
-        translateButtonBounds(button, offset_x);
-        return true;
-    }
     return false;
+}
+
+fn translateButtonBounds(button: *TextRenderer.TaskButton, offset_x: f32) void {
+    button.bounds.left += offset_x;
+    button.bounds.right += offset_x;
+    button.icon_bounds.left += offset_x;
+    button.icon_bounds.right += offset_x;
+    button.title_bounds.left += offset_x;
+    button.title_bounds.right += offset_x;
 }
 
 /// Moves the tray group and its trailing overflow control together while a
@@ -210,10 +232,11 @@ pub fn applyTrayDockOffset(view: *View, offset_x: f32) void {
         translateRectX(&icon.icon_bounds, offset_x);
     }
     translateRectX(&view.overflow_button_bounds, offset_x);
-    translateRectX(&view.overflow_bounds.rect, offset_x);
-    translateRectX(&view.system_entry_bounds, offset_x);
-    translateRectX(&view.tray_entry_bounds, offset_x);
-    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| translateButtonBounds(button, offset_x);
+    translateRectX(&view.tray_overflow_bounds.rect, offset_x);
+    for (view.tray_overflow_icons[0..@min(view.tray_overflow_count, view.tray_overflow_icons.len)]) |*icon| {
+        translateRectX(&icon.bounds, offset_x);
+        translateRectX(&icon.icon_bounds, offset_x);
+    }
 
     view.row_bounds = view.task_row_bounds;
     for (view.tray_icons[0..@min(view.tray_count, view.tray_icons.len)]) |icon| {
@@ -226,23 +249,9 @@ fn translateRectX(rect: *Geometry.RectF, offset_x: f32) void {
     rect.right += offset_x;
 }
 
-fn translateButtonBounds(button: *TextRenderer.TaskButton, offset_x: f32) void {
-    button.bounds.left += offset_x;
-    button.bounds.right += offset_x;
-    button.icon_bounds.left += offset_x;
-    button.icon_bounds.right += offset_x;
-    button.title_bounds.left += offset_x;
-    button.title_bounds.right += offset_x;
-}
-
 pub fn actionAt(view: *const View, x: f32, y: f32) ?Catalog.WindowId {
     for (view.buttons[0..view.count]) |button| {
         if (button.window_id != 0 and contains(button.bounds, x, y)) return button.window_id;
-    }
-    if (view.overflow_open) {
-        for (view.overflow_buttons[0..view.overflow_count]) |button| {
-            if (button.window_id != 0 and contains(button.bounds, x, y)) return button.window_id;
-        }
     }
     return null;
 }
@@ -254,16 +263,16 @@ pub fn trayIconAt(view: *const View, x: f32, y: f32) ?Presentation.TrayDockIcon 
     return null;
 }
 
+pub fn trayOverflowIconAt(view: *const View, x: f32, y: f32) ?Presentation.TrayDockIcon {
+    if (!view.tray_overflow_open) return null;
+    for (view.tray_overflow_icons[0..@min(view.tray_overflow_count, view.tray_overflow_icons.len)]) |icon| {
+        if (contains(icon.bounds, x, y)) return icon;
+    }
+    return null;
+}
+
 pub fn overflowContains(view: *const View, x: f32, y: f32) bool {
-    return view.overflow_open and contains(view.overflow_bounds.rect, x, y);
-}
-
-pub fn systemEntryHit(view: *const View, x: f32, y: f32) bool {
-    return view.overflow_open and contains(view.system_entry_bounds, x, y);
-}
-
-pub fn trayEntryHit(view: *const View, x: f32, y: f32) bool {
-    return view.overflow_open and contains(view.tray_entry_bounds, x, y);
+    return view.tray_overflow_open and contains(view.tray_overflow_bounds.rect, x, y);
 }
 
 pub fn overflowButtonHit(view: *const View, x: f32, y: f32) bool {
@@ -340,7 +349,7 @@ test "hover expansion shares animated bounds with task hits and moves following 
     try std.testing.expectApproxEqAbs(Layout.task_icon_hover_width_dip, capped.buttons[1].bounds.right - capped.buttons[1].bounds.left, 0.01);
 }
 
-test "task overflow publishes popup bounds and keeps hidden windows actionable" {
+test "tray overflow contains hidden tray icons without task or navigation entries" {
     const island = Geometry.RoundedBox{ .rect = .{ .left = 500, .top = 8, .right = 800, .bottom = 56 }, .radius_x = 24, .radius_y = 24 };
     const title_a = [_:0]u16{'A'};
     const title_b = [_:0]u16{'B'};
@@ -350,14 +359,21 @@ test "task overflow publishes popup bounds and keeps hidden windows actionable" 
         .{ .window_id = 42, .title = &title_b },
         .{ .window_id = 43, .title = &title_c },
     };
-    const view = buildDockView(island, &input, 9, 2, 1600, true);
+    const tray_input = [_]TrayIconInput{
+        .{ .source_index = 7, .fingerprint = 70, .promoted = true },
+        .{ .source_index = 8, .fingerprint = 80, .promoted = false },
+    };
+    const view = buildDockViewWithTray(island, &input, 9, 2, 1600, true, &tray_input, 4);
     try std.testing.expectEqual(@as(usize, 2), view.count);
-    try std.testing.expectEqual(@as(usize, 1), view.overflow_count);
-    const hidden = view.overflow_buttons[0];
-    try std.testing.expectEqual(@as(?Catalog.WindowId, 43), actionAt(&view, (hidden.bounds.left + hidden.bounds.right) * 0.5, (hidden.bounds.top + hidden.bounds.bottom) * 0.5));
-    try std.testing.expect(systemEntryHit(&view, (view.system_entry_bounds.left + view.system_entry_bounds.right) * 0.5, (view.system_entry_bounds.top + view.system_entry_bounds.bottom) * 0.5));
-    try std.testing.expect(trayEntryHit(&view, (view.tray_entry_bounds.left + view.tray_entry_bounds.right) * 0.5, (view.tray_entry_bounds.top + view.tray_entry_bounds.bottom) * 0.5));
-    try std.testing.expect(overflowContains(&view, view.overflow_bounds.rect.left + 2, view.overflow_bounds.rect.top + 2));
+    try std.testing.expectEqual(@as(usize, 1), view.hidden_task_count);
+    try std.testing.expectEqual(@as(usize, 1), view.tray_count);
+    try std.testing.expectEqual(@as(usize, 1), view.tray_overflow_count);
+    const hidden_tray_icon = view.tray_overflow_icons[0];
+    const icon_center_x = (hidden_tray_icon.bounds.left + hidden_tray_icon.bounds.right) * 0.5;
+    const icon_center_y = (hidden_tray_icon.bounds.top + hidden_tray_icon.bounds.bottom) * 0.5;
+    try std.testing.expectEqual(@as(?u16, 8), (trayOverflowIconAt(&view, icon_center_x, icon_center_y) orelse return error.HiddenTrayIconNotHit).source_index);
+    try std.testing.expect(actionAt(&view, icon_center_x, icon_center_y) == null);
+    try std.testing.expect(overflowContains(&view, view.tray_overflow_bounds.rect.left + 2, view.tray_overflow_bounds.rect.top + 2));
 }
 
 test "dock row and overflow control stay compact on wide monitors" {
@@ -371,7 +387,7 @@ test "dock row and overflow control stay compact on wide monitors" {
 
     const view = buildDockView(island, &input, 9, Layout.max_visible_task_icons, 3840, false);
     try std.testing.expectEqual(Layout.max_visible_task_icons, view.count);
-    try std.testing.expectEqual(Layout.max_task_icons - Layout.max_visible_task_icons, view.overflow_count);
+    try std.testing.expectEqual(Layout.max_task_icons - Layout.max_visible_task_icons, view.hidden_task_count);
     try std.testing.expectApproxEqAbs(Layout.dock_gap_dip + view.row_bounds.right, view.overflow_button_bounds.left, 0.001);
     try std.testing.expect(view.overflow_button_bounds.right < 3000);
 

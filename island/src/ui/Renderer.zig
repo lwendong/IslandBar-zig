@@ -24,7 +24,7 @@ const DrawTag = struct {
     pub const music_header: u64 = 7;
     pub const task_icons: u64 = 8;
     pub const tray_icons: u64 = 9;
-    pub const task_overflow: u64 = 10;
+    pub const tray_overflow: u64 = 10;
     pub const exiting_task_icons: u64 = 11;
     pub const dock_controls: u64 = 12;
 };
@@ -325,10 +325,7 @@ pub const PillAppearance = struct {
     taskbar_view: ?*const TaskbarPresentation.View = null,
     start_hover: f32 = 0,
     start_open: bool = false,
-    system_hover: f32 = 0,
     tray_hover: f32 = 0,
-    tray_open: bool = false,
-    tray_entry_hover: f32 = 0,
     line_text: []const u8 = &.{},
     line_text_mode: enum { scrolling, static } = .scrolling,
     call_up: bool = false,
@@ -884,22 +881,17 @@ pub const DeviceResources = struct {
                 if (pill.taskbar_view) |view| {
                     var resolved_buttons = view.buttons;
                     const count = @min(view.count, resolved_buttons.len);
-                    var overflow_buttons = view.overflow_buttons;
-                    const overflow_count = @min(view.overflow_count, overflow_buttons.len);
                     var exit_buttons = view.exit_buttons;
                     const exit_count = @min(view.exit_count, exit_buttons.len);
-                    const live_count = count + overflow_count;
                     var all_buttons: [max_window_icons]TextRenderer.TaskButton = @splat(.{});
                     @memcpy(all_buttons[0..count], resolved_buttons[0..count]);
-                    @memcpy(all_buttons[count .. count + overflow_count], overflow_buttons[0..overflow_count]);
-                    @memcpy(all_buttons[live_count .. live_count + exit_count], exit_buttons[0..exit_count]);
-                    self.pruneWindowIconCache(all_buttons[0 .. live_count + exit_count]);
-                    for (all_buttons[0 .. live_count + exit_count]) |*button| {
+                    @memcpy(all_buttons[count .. count + exit_count], exit_buttons[0..exit_count]);
+                    self.pruneWindowIconCache(all_buttons[0 .. count + exit_count]);
+                    for (all_buttons[0 .. count + exit_count]) |*button| {
                         button.icon = self.iconForWindow(button.*);
                     }
                     @memcpy(resolved_buttons[0..count], all_buttons[0..count]);
-                    @memcpy(overflow_buttons[0..overflow_count], all_buttons[count .. count + overflow_count]);
-                    @memcpy(exit_buttons[0..exit_count], all_buttons[live_count .. live_count + exit_count]);
+                    @memcpy(exit_buttons[0..exit_count], all_buttons[count .. count + exit_count]);
                     setDrawTag(self.d2d_context.?, DrawTag.task_icons, 0);
                     if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], content_opacity)) {
                         last_render_pill_failure = "task icons";
@@ -918,10 +910,21 @@ pub const DeviceResources = struct {
                             );
                         }
                     }
-                    setDrawTag(self.d2d_context.?, DrawTag.task_overflow, 0);
-                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, content_opacity)) {
-                        last_render_pill_failure = "task overflow";
-                        return false;
+                    if (view.tray_overflow_open and view.tray_overflow_bounds.rect.right > view.tray_overflow_bounds.rect.left) {
+                        setDrawTag(self.d2d_context.?, DrawTag.tray_overflow, 0);
+                        text.drawCardSurface(self.d2d_context, view.tray_overflow_bounds, content_opacity);
+                        for (view.tray_overflow_icons[0..@min(view.tray_overflow_count, view.tray_overflow_icons.len)], 0..) |icon, index| {
+                            if (icon.png.len == 0) continue;
+                            setDrawTag(self.d2d_context.?, DrawTag.tray_overflow, index);
+                            _ = text.drawPngIcon(
+                                self.d2d_context,
+                                TextRenderer.feature_icon_cache_count - TaskbarPresentation.max_tray_icons + index,
+                                icon.png,
+                                icon.revision,
+                                icon.icon_bounds,
+                                content_opacity,
+                            );
+                        }
                     }
                     setDrawTag(self.d2d_context.?, DrawTag.exiting_task_icons, 0);
                     if (!text.drawTaskIcons(self.d2d_context, exit_buttons[0..exit_count], content_opacity)) {
@@ -938,7 +941,7 @@ pub const DeviceResources = struct {
                 const deck = pill.deck_box orelse pill.box;
                 setDrawTag(self.d2d_context.?, DrawTag.dock_controls, 0);
                 text.drawStartButton(self.d2d_context, deck, pill.start_hover, pill.start_open, content_opacity);
-                if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, pill.tray_open, content_opacity);
+                if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, view.tray_overflow_open, content_opacity);
             }
         }
 
@@ -1400,7 +1403,7 @@ pub fn renderTagName(tag: u64) []const u8 {
         7 => "music_header",
         8 => "task_icons",
         9 => "tray_icons",
-        10 => "task_overflow",
+        10 => "tray_overflow",
         11 => "exiting_task_icons",
         12 => "dock_controls",
         else => "unknown",

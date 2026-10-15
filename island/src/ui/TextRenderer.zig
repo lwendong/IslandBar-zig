@@ -12,7 +12,7 @@ const GlassMaterial = @import("GlassMaterial");
 
 pub const task_button_count_max: usize = 32;
 pub const system_tile_count_max: usize = 6;
-pub const feature_icon_cache_count: usize = 58;
+pub const feature_icon_cache_count: usize = 82;
 const scrolling_line_gutter_dip: f32 = 24;
 const d2d_bitmap_interpolation_linear: i32 = 1;
 
@@ -1078,100 +1078,6 @@ pub const TextRenderer = struct {
         };
     }
 
-    /// Draws the independently floating overflow surface, its retained system
-    /// entries, and the task buttons that do not fit in the top row.
-    pub fn drawTaskOverflow(
-        self: *TextRenderer,
-        context_arg: Handle,
-        box: Geometry.RoundedBox,
-        buttons: []const TaskButton,
-        system_entry: Geometry.RectF,
-        tray_entry: Geometry.RectF,
-        system_hover: f32,
-        tray_hover: f32,
-        opacity_arg: f32,
-    ) bool {
-        const context = context_arg orelse return false;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01 or Geometry.width(box.rect) <= 0) return true;
-        self.drawCardSurface(context, box, opacity);
-
-        const title = [_]u16{ 0x66f4, 0x591a, 0x4efb, 0x52a1 };
-        if (self.small_body_format) |format| {
-            drawTextWithColor(context, format, &title, .{ .r = 0.95, .g = 0.96, .b = 0.98, .a = 0.94 * opacity }, .{
-                .left = box.rect.left + 14,
-                .top = box.rect.top + 10,
-                .right = box.rect.left + 120,
-                .bottom = box.rect.top + 31,
-            });
-        }
-
-        self.drawOverflowAction(context, system_entry, true, system_hover, opacity);
-        self.drawOverflowAction(context, tray_entry, false, tray_hover, opacity);
-
-        const line_height = @max(12, self.metrics().secondary_line_height);
-        for (buttons) |button| {
-            const button_opacity = opacity * std.math.clamp(button.visual_opacity, 0, 1);
-            if (button_opacity <= 0.005) continue;
-            const bounds = transformTaskRect(button.bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
-            if (bounds.right <= bounds.left or bounds.bottom <= bounds.top) continue;
-            const tile = D2DRoundedRect{ .rect = toD2DRect(bounds), .radius_x = 12, .radius_y = 12 };
-            fillRounded(context, tile, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = button_opacity });
-            if (button.active) fillRounded(context, tile, .{ .r = 0.20, .g = 0.38, .b = 0.60, .a = 0.38 * button_opacity });
-            if (button.icon) |icon| {
-                const icon_box = transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
-                drawMusicBitmap(context, icon, icon_box, button_opacity, 1);
-            }
-            const icon_box = transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
-            if (button.window_count > 1) drawWindowStackMark(context, icon_box, button_opacity);
-            if (button.title) |task_title| {
-                if (task_title[0] != 0) {
-                    const title_bounds = transformTaskRect(button.title_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
-                    drawTaskTitle(self, context, std.mem.span(task_title), button.active, .{
-                        .r = 0.89,
-                        .g = 0.90,
-                        .b = 0.93,
-                        .a = 0.9 * button_opacity,
-                    }, title_bounds, line_height);
-                }
-            }
-        }
-        return true;
-    }
-
-    fn drawOverflowAction(self: *TextRenderer, context: *anyopaque, bounds: Geometry.RectF, system: bool, hover: f32, opacity: f32) void {
-        if (bounds.right <= bounds.left or bounds.bottom <= bounds.top) return;
-        const shape = D2DRoundedRect{ .rect = toD2DRect(bounds), .radius_x = 7, .radius_y = 7 };
-        fillRounded(context, shape, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = opacity });
-        if (hover > 0.01) fillRounded(context, shape, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.12 * opacity * std.math.clamp(hover, 0, 1) });
-        const cx = (bounds.left + bounds.right) * 0.5;
-        const cy = bounds.top + 11;
-        const ink = D2DColor{ .r = 0.86, .g = 0.89, .b = 0.94, .a = 0.94 * opacity };
-        if (system) {
-            fillEllipse(context, .{ .point = .{ .x = cx, .y = cy }, .radius_x = 4.1, .radius_y = 4.1 }, ink);
-            fillEllipse(context, .{ .point = .{ .x = cx, .y = cy }, .radius_x = 1.7, .radius_y = 1.7 }, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
-            for (0..4) |index| {
-                const dx: f32 = if (index % 2 == 0) 7 else 0;
-                const dy: f32 = if (index % 2 == 1) 7 else 0;
-                const sign_x: f32 = if (index == 1 or index == 2) -1 else 1;
-                const sign_y: f32 = if (index >= 2) -1 else 1;
-                drawLine(context, .{ .x = cx + dx * sign_x, .y = cy + dy * sign_y }, .{ .x = cx + (dx + 2) * sign_x, .y = cy + (dy + 2) * sign_y }, ink, 2);
-            }
-        } else {
-            for (0..3) |index| {
-                const offset = (@as(f32, @floatFromInt(index)) - 1) * 5;
-                fillEllipse(context, .{ .point = .{ .x = cx + offset, .y = cy }, .radius_x = 1.7, .radius_y = 1.7 }, ink);
-            }
-        }
-        const label: []const u16 = if (system) &.{ 0x8bbe, 0x7f6e } else &.{ 0x6258, 0x76d8 };
-        drawTaskTitle(self, context, label, false, ink, .{
-            .left = bounds.left + 1,
-            .top = bounds.top + 17,
-            .right = bounds.right - 1,
-            .bottom = bounds.bottom - 1,
-        }, 13);
-    }
-
     fn musicPngBitmap(self: *TextRenderer, context: *anyopaque, cache: *BitmapCache, png: []const u8, revision: u64, slot: WicImage.DecodeSlot) ?*anyopaque {
         if (png.len == 0) {
             releaseCom(&cache.bitmap);
@@ -1406,19 +1312,20 @@ pub const TextRenderer = struct {
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
-        const diameter = @min(box.right - box.left, box.bottom - box.top);
-        const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = diameter * 0.5, .radius_y = diameter * 0.5 };
-        fillRounded(context, rounded, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
-        if (wash > 0.01) fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.15 * opacity * wash });
-        const ink = D2DColor{ .r = 0.96, .g = 0.97, .b = 0.99, .a = 0.96 * opacity };
+        const ink = D2DColor{
+            .r = 0.92 + (0.29 - 0.92) * wash,
+            .g = 0.94 + (0.60 - 0.94) * wash,
+            .b = 0.97 + (0.98 - 0.97) * wash,
+            .a = 0.94 * opacity,
+        };
         const cx = (box.left + box.right) * 0.5;
         const cy = (box.top + box.bottom) * 0.5;
-        const half_width: f32 = 4;
-        const half_height: f32 = 2.4;
+        const half_width: f32 = 6;
+        const half_height: f32 = 3.5;
         const tip_y = if (open) cy - half_height else cy + half_height;
         const wing_y = if (open) cy + half_height else cy - half_height;
-        drawLine(context, .{ .x = cx - half_width, .y = wing_y }, .{ .x = cx, .y = tip_y }, ink, 1.6);
-        drawLine(context, .{ .x = cx, .y = tip_y }, .{ .x = cx + half_width, .y = wing_y }, ink, 1.6);
+        drawLine(context, .{ .x = cx - half_width, .y = wing_y }, .{ .x = cx, .y = tip_y }, ink, 1.8);
+        drawLine(context, .{ .x = cx, .y = tip_y }, .{ .x = cx + half_width, .y = wing_y }, ink, 1.8);
     }
 
     /// Measures the exact run used by drawStatusLine, for parity checks and width constraints.

@@ -9,6 +9,7 @@ pub const TrayIconInput = struct {
     png: []const u8 = &.{},
     source_index: u16 = 0,
     fingerprint: u64 = 0,
+    promoted: bool = false,
 };
 
 pub const TrayDockIcon = struct {
@@ -31,13 +32,13 @@ pub const View = struct {
     count: usize = 0,
     tray_icons: [max_tray_icons]TrayDockIcon = @splat(.{}),
     tray_count: usize = 0,
+    tray_overflow_icons: [max_tray_icons]TrayDockIcon = @splat(.{}),
+    tray_overflow_count: usize = 0,
     overflow_button_bounds: Geometry.RectF = .{},
-    overflow_bounds: Geometry.RoundedBox = .{ .rect = .{} },
-    overflow_open: bool = false,
-    overflow_buttons: [20]TextRenderer.TaskButton = @splat(.{}),
-    overflow_count: usize = 0,
+    tray_overflow_bounds: Geometry.RoundedBox = .{ .rect = .{} },
+    tray_overflow_open: bool = false,
+    hidden_task_ids: [20]u64 = @splat(0),
+    hidden_task_count: usize = 0,
     exit_buttons: [20]TextRenderer.TaskButton = @splat(.{}),
     exit_count: usize = 0,
-    system_entry_bounds: Geometry.RectF = .{},
-    tray_entry_bounds: Geometry.RectF = .{},
 };

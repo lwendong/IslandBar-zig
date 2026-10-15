@@ -927,7 +927,7 @@ const PaintContext = struct {
     candidate_taskbar_snapshot: TaskbarCatalog.Snapshot = .{},
     candidate_taskbar_view: TaskbarPage.View = .{},
     presented_taskbar_view: TaskbarPage.View = .{},
-    task_overflow_open: bool = false,
+    tray_overflow_open: bool = false,
     task_last_refresh_ms: u64 = 0,
     task_buttons: [Renderer.max_task_buttons]TextRenderer.TaskButton = @splat(.{}),
     thumbnail_preview: ?*ThumbnailAdapter.ThumbnailAdapter = null,
@@ -983,12 +983,8 @@ const PaintContext = struct {
 
     start_button_wash: f32 = 0,
     start_button_velocity: f32 = 0,
-    system_button_wash: f32 = 0,
-    system_button_velocity: f32 = 0,
     tray_button_wash: f32 = 0,
     tray_button_velocity: f32 = 0,
-    tray_entry_wash: f32 = 0,
-    tray_entry_velocity: f32 = 0,
     forced_start_hover: bool = false,
     start_pin_icons: [18]?[]const u8 = @splat(null),
     start_pin_icon_sizes: [18]usize = @splat(0),
@@ -1169,11 +1165,6 @@ fn visibleTaskButton(view: *const TaskbarPage.View, window_id: TaskbarCatalog.Wi
     for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
         if (button.window_id == window_id) return button;
     }
-    if (view.overflow_open) {
-        for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
-            if (button.window_id == window_id) return button;
-        }
-    }
     return null;
 }
 
@@ -1182,8 +1173,8 @@ fn taskButtonInLayout(view: *const TaskbarPage.View, window_id: TaskbarCatalog.W
     for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
         if (button.window_id == window_id) return true;
     }
-    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
-        if (button.window_id == window_id) return true;
+    for (view.hidden_task_ids[0..@min(view.hidden_task_count, view.hidden_task_ids.len)]) |hidden_id| {
+        if (hidden_id == window_id) return true;
     }
     return false;
 }
@@ -1202,11 +1193,6 @@ fn setTaskButtonVisual(button: *TextRenderer.TaskButton, opacity: f32, scale: f3
 
 fn applyTaskButtonVisual(view: *TaskbarPage.View, window_id: TaskbarCatalog.WindowId, opacity: f32, scale: f32, offset_y: f32) bool {
     for (view.buttons[0..@min(view.count, view.buttons.len)]) |*button| {
-        if (button.window_id != window_id) continue;
-        setTaskButtonVisual(button, opacity, scale, offset_y);
-        return true;
-    }
-    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| {
         if (button.window_id != window_id) continue;
         setTaskButtonVisual(button, opacity, scale, offset_y);
         return true;
@@ -1252,19 +1238,6 @@ fn prepareTaskIconTransitions(context: *PaintContext, view: *TaskbarPage.View, n
             fading.visual_offset_y = 0;
             addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .disappear, .button = fading });
         }
-        if (previous.overflow_open and view.overflow_open) {
-            for (previous.overflow_buttons[0..@min(previous.overflow_count, previous.overflow_buttons.len)]) |button| {
-                if (taskButtonInLayout(view, button.window_id)) continue;
-                var fading = button;
-                fading.title = null;
-                fading.active = false;
-                fading.hover_progress = 0;
-                fading.visual_opacity = 1;
-                fading.visual_scale = 1;
-                fading.visual_offset_y = 0;
-                addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .disappear, .button = fading });
-            }
-        }
         for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
             if (visibleTaskButton(previous, button.window_id)) |old_button| {
                 if (@abs(old_button.bounds.top - button.bounds.top) < 2) {
@@ -1278,23 +1251,6 @@ fn prepareTaskIconTransitions(context: *PaintContext, view: *TaskbarPage.View, n
                 }
             } else {
                 addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .appear });
-            }
-        }
-        if (view.overflow_open) {
-            for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
-                if (visibleTaskButton(previous, button.window_id)) |old_button| {
-                    if (@abs(old_button.bounds.top - button.bounds.top) < 2) {
-                        const offset_x = old_button.bounds.left - button.bounds.left;
-                        if (@abs(offset_x) > 0.5) addTaskIconTransition(context, .{
-                            .window_id = button.window_id,
-                            .started_ms = now,
-                            .kind = .move,
-                            .from_offset_x = offset_x,
-                        });
-                    }
-                } else {
-                    addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .appear });
-                }
             }
         }
         context.task_icon_transition_revision = view.catalog_revision;
@@ -1641,9 +1597,6 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     const panel_controls_lit = PresentationPolicy.controlLitFor(paint_context.presentation, outer_card_up);
     pill.start_open = panel_controls_lit.start;
     pill.tray_hover = paint_context.tray_button_wash;
-    pill.tray_open = paint_context.task_overflow_open;
-    pill.system_hover = paint_context.system_button_wash;
-    pill.tray_entry_hover = paint_context.tray_entry_wash;
     const task_island = deck_island;
     const monitor_width_dip = @as(f32, @floatFromInt(window_width_px)) / @max(paint_context.scale, 0.01);
     var tray_dock_icons: [TaskbarPage.max_tray_icons]TaskbarPage.TrayIconInput = @splat(.{});
@@ -1651,19 +1604,21 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     var tray_dock_revision: u64 = 0;
     if (paint_context.tray_icons) |icons| {
         tray_dock_revision = icons.getRevision();
-        for (0..icons.count()) |index| {
-            if (tray_dock_icon_count >= tray_dock_icons.len) break;
-            const icon = icons.at(index) orelse continue;
-            // Windows marks icons that belong in the notification area as promoted;
-            // unpromoted icons remain available from the existing tray flyout.
-            if (!icon.promoted) continue;
-            const identity = TrayCatalog.identityFor(icon, tray_dock_revision, index);
-            tray_dock_icons[tray_dock_icon_count] = .{
-                .png = icon.png,
-                .source_index = identity.index,
-                .fingerprint = identity.fingerprint,
-            };
-            tray_dock_icon_count += 1;
+        for (0..2) |pass| {
+            const want_promoted = pass == 0;
+            for (0..icons.count()) |index| {
+                if (tray_dock_icon_count >= tray_dock_icons.len) break;
+                const icon = icons.at(index) orelse continue;
+                if (icon.promoted != want_promoted) continue;
+                const identity = TrayCatalog.identityFor(icon, tray_dock_revision, index);
+                tray_dock_icons[tray_dock_icon_count] = .{
+                    .png = icon.png,
+                    .source_index = identity.index,
+                    .fingerprint = identity.fingerprint,
+                    .promoted = icon.promoted,
+                };
+                tray_dock_icon_count += 1;
+            }
         }
     }
     paint_context.candidate_taskbar_view = TaskbarPage.buildDockViewWithHoverProgressAndTray(
@@ -1672,7 +1627,7 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
         paint_context.candidate_taskbar_snapshot.revision,
         TaskbarLayout.taskIconsThatFitForMonitor(monitor_width_dip, task_count),
         monitor_width_dip,
-        paint_context.task_overflow_open,
+        paint_context.tray_overflow_open,
         tray_dock_icons[0..tray_dock_icon_count],
         tray_dock_revision,
     );
@@ -1783,7 +1738,7 @@ fn activateTaskWindow(context: *PaintContext, id: TaskbarCatalog.WindowId, windo
     } else {
         Log.logLine("task button: stale presented window identity was discarded");
     }
-    context.task_overflow_open = false;
+    context.tray_overflow_open = false;
     context.task_last_refresh_ms = 0;
     _ = context.task_windows.refresh();
     context.task_windows.snapshot(&context.candidate_taskbar_snapshot);
@@ -1961,7 +1916,7 @@ fn updateInputRegion(context: *PaintContext) bool {
         .card_left_dip = if (card_up) card.rect.left else 0,
         .task_row_bounds = context.presented_taskbar_view.row_bounds,
         .overflow_button_bounds = overflowButtonBoundsFor(context, Motion.boxForState(.collapsed, context.motion.anchor)),
-        .overflow_bounds = context.presented_taskbar_view.overflow_bounds.rect,
+        .overflow_bounds = context.presented_taskbar_view.tray_overflow_bounds.rect,
     });
     const ok = window.setInputRegion(.{ .left = region.left, .top = region.top, .right = region.right, .bottom = region.bottom });
     if (!ok) Log.logLine("window input region could not be updated");
@@ -2813,11 +2768,12 @@ fn nativeCursorHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) call
         Motion.rowAnchorBox(context.motion.current(), resting);
     if (BarControlLayout.startButtonHit(deck, local[0], local[1]) or
         TaskbarPage.overflowButtonHit(&context.presented_taskbar_view, local[0], local[1]) or
-        TaskbarPage.systemEntryHit(&context.presented_taskbar_view, local[0], local[1]) or
-        TaskbarPage.trayEntryHit(&context.presented_taskbar_view, local[0], local[1])) return true;
+        TaskbarPage.overflowContains(&context.presented_taskbar_view, local[0], local[1])) return true;
 
     if (TaskbarPage.actionAt(&context.presented_taskbar_view, local[0], local[1]) != null) return true;
-    if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, local[0], local[1]) != null) return true;
+    if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, local[0], local[1]) != null or
+        TaskbarPage.trayOverflowIconAt(&context.presented_taskbar_view, local[0], local[1]) != null or
+        TaskbarPage.overflowContains(&context.presented_taskbar_view, local[0], local[1])) return true;
 
     const outer_card_up = context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded;
     if (!outer_card_up) return false;
@@ -3299,7 +3255,8 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         const local_right = pointToLocalDip(right_click_point, context);
         const notification_active = hasActiveNotification(context, now);
         const card = systemPanelCardBox(context);
-        if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, local_right[0], local_right[1])) |dock_icon| {
+        if (TaskbarPage.trayOverflowIconAt(&context.presented_taskbar_view, local_right[0], local_right[1]) orelse
+            TaskbarPage.trayIconAt(&context.presented_taskbar_view, local_right[0], local_right[1])) |dock_icon| {
             startTrayPressIdentity(context, trayDockIdentity(dock_icon), true);
         } else if (!notification_active and context.start_page_open and context.motion.target() == .expanded and context.launcher_state.page == .pins) {
             const hit = LauncherPage.actionAt(&context.presented_launcher_layout, local_right[0], local_right[1]);
@@ -3444,14 +3401,10 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         else
             Motion.rowAnchorBox(context.motion.current(), resting_deck);
         const on_start_button = BarControlLayout.startButtonHit(deck_island, local[0], local[1]);
-        const on_system_button = TaskbarPage.systemEntryHit(&context.presented_taskbar_view, local[0], local[1]);
-        const on_tray_button = TaskbarPage.trayEntryHit(&context.presented_taskbar_view, local[0], local[1]);
         const on_overflow_button = TaskbarPage.overflowButtonHit(&context.presented_taskbar_view, local[0], local[1]);
-        const on_control = on_start_button or on_system_button or on_tray_button or on_overflow_button;
+        const on_control = on_start_button or on_overflow_button;
         var button_wash_changed = false;
         button_wash_changed = BarControlLayout.controlWashStep(&context.start_button_wash, &context.start_button_velocity, if (context.forced_start_hover or on_start_button) 1 else 0, dt) or button_wash_changed;
-        button_wash_changed = BarControlLayout.controlWashStep(&context.system_button_wash, &context.system_button_velocity, if (on_system_button) 1 else 0, dt) or button_wash_changed;
-        button_wash_changed = BarControlLayout.controlWashStep(&context.tray_entry_wash, &context.tray_entry_velocity, if (on_tray_button) 1 else 0, dt) or button_wash_changed;
         button_wash_changed = BarControlLayout.controlWashStep(&context.tray_button_wash, &context.tray_button_velocity, if (on_overflow_button) 1 else 0, dt) or button_wash_changed;
         const on_pill = pointInBox(interactive_pill, local[0], local[1]) or on_control;
         if (button_wash_changed or task_hover_animating or task_hover_visual_changed) window.invalidate();
@@ -3468,7 +3421,8 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             if (context.tray_state.menu_open) {
                 handleTrayMenuClick(context, pressed_local[0], pressed_local[1]);
                 window.invalidate();
-            } else if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, pressed_local[0], pressed_local[1])) |dock_icon| {
+            } else if (TaskbarPage.trayOverflowIconAt(&context.presented_taskbar_view, pressed_local[0], pressed_local[1]) orelse
+                TaskbarPage.trayIconAt(&context.presented_taskbar_view, pressed_local[0], pressed_local[1])) |dock_icon| {
                 startTrayPressIdentity(context, trayDockIdentity(dock_icon), false);
             } else if (hasActiveNotification(context, now)) {
                 if (context.notifications) |store| {
@@ -3491,22 +3445,9 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                 else
                     Motion.rowAnchorBox(context.motion.current(), resting_deck);
                 const press_on_start = BarControlLayout.startButtonHit(press_deck, pressed_local[0], pressed_local[1]);
-                const press_on_system = TaskbarPage.systemEntryHit(&context.presented_taskbar_view, pressed_local[0], pressed_local[1]);
-                const press_on_tray = TaskbarPage.trayEntryHit(&context.presented_taskbar_view, pressed_local[0], pressed_local[1]);
                 const press_on_overflow = TaskbarPage.overflowButtonHit(&context.presented_taskbar_view, pressed_local[0], pressed_local[1]);
-                if (!notification_active_now and press_on_system) {
-                    context.task_overflow_open = false;
-                    const close = context.system_panel_pinned and !context.start_page_open and !context.tray_state.page_open and !context.sound_page_open;
-                    closeTrayMenu(context);
-                    context.system_panel_pinned = !close;
-                    if (!close) context.card_hang = .overflow_button;
-                    context.start_page_open = false;
-                    TrayController.closePage(&context.tray_state);
-                    context.sound_page_open = false;
-                    if (close) _ = context.motion.setTarget(resting_state) else _ = context.motion.setTarget(.expanded);
-                    window.invalidate();
-                } else if (!notification_active_now and press_on_start) {
-                    context.task_overflow_open = false;
+                if (!notification_active_now and press_on_start) {
+                    context.tray_overflow_open = false;
                     const close = context.start_page_open;
                     closeTrayMenu(context);
                     context.start_page_open = !close;
@@ -3524,29 +3465,9 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                         _ = context.motion.setTarget(.expanded);
                     }
                     window.invalidate();
-                } else if (!notification_active_now and press_on_tray) {
-                    context.task_overflow_open = false;
-                    const close = context.tray_state.page_open;
-                    closeTrayMenu(context);
-                    if (close) TrayController.closePage(&context.tray_state) else TrayController.openPage(&context.tray_state, context.tray_page_revision);
-                    context.start_page_open = false;
-                    context.sound_page_open = false;
-                    context.system_panel_pinned = !close;
-                    if (!close) context.card_hang = .tray_button;
-                    if (close) {
-                        _ = context.motion.setTarget(resting_state);
-                    } else {
-                        if (context.tray_icons) |icons| {
-                            _ = icons.refresh(std.heap.page_allocator);
-                            context.tray_last_refresh_ms = now;
-                        }
-                        buildTrayPageText(context);
-                        _ = context.motion.setTarget(.expanded);
-                    }
-                    window.invalidate();
                 } else if (!notification_active_now and press_on_overflow) {
-                    context.task_overflow_open = !context.task_overflow_open;
-                    if (context.task_overflow_open) {
+                    context.tray_overflow_open = !context.tray_overflow_open;
+                    if (context.tray_overflow_open) {
                         closeTrayMenu(context);
                         context.system_panel_pinned = false;
                         context.start_page_open = false;

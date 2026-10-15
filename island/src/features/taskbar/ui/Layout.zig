@@ -6,7 +6,7 @@ const BarLayout = @import("BarControlLayout");
 pub const RectF = Geometry.RectF;
 pub const RoundedBox = Geometry.RoundedBox;
 pub const max_task_icons: usize = 20;
-pub const max_visible_task_icons: usize = 5;
+pub const max_visible_task_icons: usize = max_task_icons;
 pub const task_icon_button_dip: f32 = 38;
 pub const task_icon_size_dip: f32 = 26;
 pub const task_icon_hover_width_dip: f32 = 148;
@@ -20,75 +20,74 @@ pub const task_tray_gap_dip: f32 = 10;
 pub const max_visible_tray_icons: usize = 24;
 pub const dock_gap_dip: f32 = BarLayout.dock_gap_dip;
 pub const row_right_margin_dip: f32 = 20;
-pub const overflow_panel_width_dip: f32 = 272;
-pub const overflow_panel_padding_dip: f32 = 12;
-pub const overflow_header_height_dip: f32 = 30;
-pub const overflow_entry_height_dip: f32 = 34;
-pub const overflow_grid_top_gap_dip: f32 = 10;
-pub const overflow_tile_width_dip: f32 = 50;
-pub const overflow_tile_height_dip: f32 = 62;
-pub const overflow_tile_gap_x_dip: f32 = 6;
-pub const overflow_tile_gap_y_dip: f32 = 4;
-pub const overflow_grid_columns: usize = 4;
+pub const tray_overflow_icon_side_dip: f32 = tray_icon_button_dip;
+pub const tray_overflow_icon_gap_dip: f32 = tray_icon_gap_dip;
+pub const tray_overflow_panel_padding_dip: f32 = 8;
+pub const tray_overflow_grid_columns: usize = 6;
 
 pub fn monitorWidthFor(island: RoundedBox) f32 {
     return @max(0, island.rect.left + island.rect.right);
 }
 
-pub const OverflowLayout = struct {
+pub const TrayOverflowLayout = struct {
     panel: RoundedBox = .{ .rect = .{} },
-    system_entry: RectF = .{},
-    tray_entry: RectF = .{},
     grid_top: f32 = 0,
-    tile_width: f32 = overflow_tile_width_dip,
+    columns: usize = 0,
 };
 
 pub fn overflowButtonFor(island: RoundedBox, row_right: f32) RectF {
-    return BarLayout.buttonAt(row_right + dock_gap_dip, island);
+    return smallDockButtonAt(island, row_right + dock_gap_dip);
 }
 
-pub fn overflowLayoutFor(island: RoundedBox, arrow: RectF, monitor_width_dip: f32, hidden_count: usize) OverflowLayout {
-    const panel_width = @min(overflow_panel_width_dip, @max(180, monitor_width_dip - row_right_margin_dip * 2));
-    const left = @max(row_right_margin_dip, arrow.right - panel_width);
+pub fn trayOverflowLayoutFor(island: RoundedBox, arrow: RectF, monitor_width_dip: f32, hidden_count: usize) TrayOverflowLayout {
+    if (hidden_count == 0) return .{};
+    var columns = @min(hidden_count, tray_overflow_grid_columns);
+    const max_panel_width = @max(
+        tray_overflow_icon_side_dip + tray_overflow_panel_padding_dip * 2,
+        monitor_width_dip - row_right_margin_dip * 2,
+    );
+    while (columns > 1) : (columns -= 1) {
+        const candidate_width = @as(f32, @floatFromInt(columns)) * tray_overflow_icon_side_dip +
+            @as(f32, @floatFromInt(columns - 1)) * tray_overflow_icon_gap_dip +
+            tray_overflow_panel_padding_dip * 2;
+        if (candidate_width <= max_panel_width) break;
+    }
+    const panel_width = @as(f32, @floatFromInt(columns)) * tray_overflow_icon_side_dip +
+        @as(f32, @floatFromInt(columns - 1)) * tray_overflow_icon_gap_dip +
+        tray_overflow_panel_padding_dip * 2;
+    const max_left = @max(row_right_margin_dip, monitor_width_dip - row_right_margin_dip - panel_width);
+    const left = std.math.clamp(arrow.right - panel_width, row_right_margin_dip, max_left);
     const top = island.rect.bottom + 10;
-    const pad = overflow_panel_padding_dip;
-    const entry_top = top + pad + overflow_header_height_dip + 6;
-    const entry_width = (panel_width - pad * 2 - 8) * 0.5;
-    const grid_top = entry_top + overflow_entry_height_dip + overflow_grid_top_gap_dip;
-    const rows = if (hidden_count == 0) 0 else (hidden_count + overflow_grid_columns - 1) / overflow_grid_columns;
-    const grid_height = if (rows == 0) @as(f32, 0) else @as(f32, @floatFromInt(rows)) * overflow_tile_height_dip + @as(f32, @floatFromInt(rows - 1)) * overflow_tile_gap_y_dip;
-    const bottom = grid_top + grid_height + pad;
-    const tile_width = @min(overflow_tile_width_dip, (panel_width - pad * 2 - @as(f32, @floatFromInt(overflow_grid_columns - 1)) * overflow_tile_gap_x_dip) / @as(f32, @floatFromInt(overflow_grid_columns)));
+    const rows = (hidden_count + columns - 1) / columns;
+    const grid_height = @as(f32, @floatFromInt(rows)) * tray_overflow_icon_side_dip +
+        @as(f32, @floatFromInt(rows - 1)) * tray_overflow_icon_gap_dip;
+    const bottom = top + tray_overflow_panel_padding_dip * 2 + grid_height;
+    const grid_top = top + tray_overflow_panel_padding_dip;
     return .{
         .panel = .{
             .rect = .{ .left = left, .top = top, .right = left + panel_width, .bottom = bottom },
-            .radius_x = 18,
-            .radius_y = 18,
+            .radius_x = 14,
+            .radius_y = 14,
         },
-        .system_entry = .{ .left = left + pad, .top = entry_top, .right = left + pad + entry_width, .bottom = entry_top + overflow_entry_height_dip },
-        .tray_entry = .{ .left = left + pad + entry_width + 8, .top = entry_top, .right = left + panel_width - pad, .bottom = entry_top + overflow_entry_height_dip },
         .grid_top = grid_top,
-        .tile_width = tile_width,
+        .columns = columns,
     };
 }
 
-pub fn overflowTaskButtonAt(layout: OverflowLayout, index: usize) RectF {
+pub fn trayOverflowCellAt(layout: TrayOverflowLayout, index: usize) RectF {
     if (layout.panel.rect.right <= layout.panel.rect.left) return .{};
-    const row = index / overflow_grid_columns;
-    const column = index % overflow_grid_columns;
-    const x = layout.panel.rect.left + overflow_panel_padding_dip + @as(f32, @floatFromInt(column)) * (layout.tile_width + overflow_tile_gap_x_dip);
-    const y = layout.grid_top + @as(f32, @floatFromInt(row)) * (overflow_tile_height_dip + overflow_tile_gap_y_dip);
-    return .{ .left = x, .top = y, .right = x + layout.tile_width, .bottom = y + overflow_tile_height_dip };
+    const row = index / layout.columns;
+    const column = index % layout.columns;
+    const x = layout.panel.rect.left + tray_overflow_panel_padding_dip + @as(f32, @floatFromInt(column)) * (tray_overflow_icon_side_dip + tray_overflow_icon_gap_dip);
+    const y = layout.grid_top + @as(f32, @floatFromInt(row)) * (tray_overflow_icon_side_dip + tray_overflow_icon_gap_dip);
+    return .{ .left = x, .top = y, .right = x + tray_overflow_icon_side_dip, .bottom = y + tray_overflow_icon_side_dip };
 }
 
-pub fn overflowTaskIconInBox(button: RectF) RectF {
-    const side = @min(32, @min(button.right - button.left, button.bottom - button.top - 24));
+pub fn trayOverflowIconInBox(button: RectF) RectF {
+    const side = @min(tray_icon_size_dip, @min(button.right - button.left, button.bottom - button.top));
     const left = (button.left + button.right - side) * 0.5;
-    return .{ .left = left, .top = button.top + 4, .right = left + side, .bottom = button.top + 4 + side };
-}
-
-pub fn overflowTaskTitleAt(button: RectF) RectF {
-    return .{ .left = button.left + 1, .top = button.top + 37, .right = button.right - 1, .bottom = button.bottom - 2 };
+    const top = (button.top + button.bottom - side) * 0.5;
+    return .{ .left = left, .top = top, .right = left + side, .bottom = top + side };
 }
 
 pub fn taskIconsThatFitForMonitor(monitor_width_dip: f32, wanted: usize) usize {
@@ -159,13 +158,7 @@ pub fn taskIconTitleInBox(button: RectF) RectF {
 }
 
 pub fn trayIconButtonAt(island: RoundedBox, left: f32) RectF {
-    const centre_y = (island.rect.top + island.rect.bottom) * 0.5;
-    return .{
-        .left = left,
-        .top = centre_y - tray_icon_button_dip * 0.5,
-        .right = left + tray_icon_button_dip,
-        .bottom = centre_y + tray_icon_button_dip * 0.5,
-    };
+    return smallDockButtonAt(island, left);
 }
 
 pub fn trayIconInBox(button: RectF) RectF {
@@ -176,6 +169,17 @@ pub fn trayIconInBox(button: RectF) RectF {
         .top = centre_y - tray_icon_size_dip * 0.5,
         .right = centre_x + tray_icon_size_dip * 0.5,
         .bottom = centre_y + tray_icon_size_dip * 0.5,
+    };
+}
+
+fn smallDockButtonAt(island: RoundedBox, left: f32) RectF {
+    const centre_y = (island.rect.top + island.rect.bottom) * 0.5;
+    const top = centre_y - tray_icon_button_dip * 0.5;
+    return .{
+        .left = left,
+        .top = top,
+        .right = left + tray_icon_button_dip,
+        .bottom = top + tray_icon_button_dip,
     };
 }
 
