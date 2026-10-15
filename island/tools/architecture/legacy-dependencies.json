@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "legacy_edges": [
+    "src/features/MusicSession.zig -> src/platform/windows/Log.zig",
+    "src/features/MusicSession.zig -> src/platform/windows/WicImage.zig",
+    "src/features/NotificationIcon.zig -> src/features/MusicSession.zig",
+    "src/features/NotificationIcon.zig -> src/platform/windows/Log.zig",
+    "src/features/NotificationIcon.zig -> src/platform/windows/WicImage.zig",
+    "src/features/SoundOutput.zig -> src/features/MusicSession.zig",
+    "src/features/SoundOutput.zig -> src/platform/windows/Log.zig",
+    "src/features/StartApps.zig -> src/platform/windows/WicImage.zig",
+    "src/features/WeChatWatch.zig -> src/platform/windows/Log.zig",
+    "src/features/Weather.zig -> src/platform/windows/Log.zig",
+    "src/platform/windows/NotificationPipe.zig -> src/features/Notification.zig",
+    "src/platform/windows/SystemToggles.zig -> src/features/StartMenu.zig",
+    "src/ui/IslandWindow.zig -> src/platform/windows/AppBar.zig",
+    "src/ui/Renderer.zig -> src/features/MusicSession.zig",
+    "src/ui/Renderer.zig -> src/features/Notification.zig",
+    "src/ui/Renderer.zig -> src/features/Weather.zig",
+    "src/ui/Renderer.zig -> src/platform/windows/WicImage.zig",
+    "src/ui/TextRenderer.zig -> src/features/StartApps.zig",
+    "src/ui/TextRenderer.zig -> src/features/Weather.zig",
+    "src/ui/TextRenderer.zig -> src/platform/windows/WicImage.zig",
+    "src/ui/Theme.zig -> src/platform/windows/Log.zig"
+  ]
+}

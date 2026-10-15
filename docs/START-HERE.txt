@@ -1,0 +1,5 @@
+IslandBar code and build files are in ../island. Run Zig build commands from that directory.
+
+Architecture and progress documents are in this directory. Start with
+IslandBar-Architecture-V1.md and REFACTOR-BASELINE.md. The architecture document
+is still PROPOSED; its code paths are relative to ../island.

@@ -25,6 +25,14 @@
 
 # --- build output -----------------------------------------------------
 build/
+.zig-cache/
+.zig-global-cache/
+.zig-cache-*/
+.zig-out*/
+zig-out/
+island/zig-out/
+island/*.stdout.txt
+island/*.stderr.txt
 out/
 [Oo]ut/
 *.obj
@@ -51,11 +59,12 @@ CTestTestfile.cmake
 # --- local snapshots and runtime dumps --------------------------------
 backups/
 captures/
-IslandBar/backups/
-IslandBar/captures/
+island/backups/
+island/captures/
 
 # --- screenshots ------------------------------------------------------
-# The documentation itself is text and IS committed; only the images are not.
+# Screenshots are kept under docs/screenshots for local review, not committed.
+docs/screenshots/
 docs/*.png
 docs/*.jpg
 docs/*.jpeg
