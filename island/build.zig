@@ -370,6 +370,8 @@ pub fn build(b: *std.Build) void {
     const run_media_service_tests = b.addRunArtifact(media_service_tests);
     const text_renderer_tests = b.addTest(.{ .root_module = moduleByName(&modules, "TextRenderer") });
     const run_text_renderer_tests = b.addRunArtifact(text_renderer_tests);
+    const renderer_tests = b.addTest(.{ .root_module = moduleByName(&modules, "Renderer") });
+    const run_renderer_tests = b.addRunArtifact(renderer_tests);
     const weather_service_tests = b.addTest(.{ .root_module = moduleByName(&modules, "WeatherService") });
     inline for (.{ "kernel32", "winhttp" }) |library| weather_service_tests.root_module.linkSystemLibrary(library, .{});
     const run_weather_service_tests = b.addRunArtifact(weather_service_tests);
@@ -389,6 +391,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mixer_slider_tests.step);
     test_step.dependOn(&run_theme_token_tests.step);
     test_step.dependOn(&run_theme_tests.step);
+    test_step.dependOn(&run_renderer_tests.step);
     test_step.dependOn(&run_sound_controller_tests.step);
     test_step.dependOn(&run_sound_contract_tests.step);
     test_step.dependOn(&run_sound_page_tests.step);

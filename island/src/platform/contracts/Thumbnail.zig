@@ -4,6 +4,7 @@ pub const Size = extern struct { cx: i32, cy: i32 };
 
 pub const Placement = struct {
     card: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+    header: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     picture: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     valid: bool = false,
 };

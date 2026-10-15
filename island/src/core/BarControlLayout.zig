@@ -5,67 +5,39 @@ const Motion = @import("Motion");
 pub const RectF = Geometry.RectF;
 pub const RoundedBox = Geometry.RoundedBox;
 
-pub const start_button_dip: f32 = 30;
-pub const start_icon_dip: f32 = 20;
-pub const control_gap_dip: f32 = 4;
-pub const control_pad_dip: f32 = 8;
-pub const status_strip_width_dip: f32 = 268;
-pub const status_strip_height_dip: f32 = 26;
-pub const status_strip_gap_dip: f32 = 10;
-pub const status_strip_pad_dip: f32 = 8;
-pub const status_strip_fade_seconds: f32 = 0.20;
+pub const start_button_dip: f32 = 38;
+pub const start_icon_dip: f32 = 19;
+pub const dock_gap_dip: f32 = 12;
 pub const control_spring_omega: f32 = 48;
 pub const spring_zeta: f32 = 0.8;
-pub const tray_icon_dip: f32 = 30;
-pub const tray_picture_dip: f32 = 16;
-pub const tray_gap_dip: f32 = 2;
-pub const tray_right_margin_dip: f32 = 6;
-pub const max_tray_icons: usize = 24;
 
-pub fn deckRight(island: RoundedBox) f32 {
-    return island.rect.left - control_pad_dip;
-}
-
-pub fn deckButtonFor(island: RoundedBox, index: i32) RectF {
-    const right = deckRight(island) - @as(f32, @floatFromInt(index)) * (start_button_dip + control_gap_dip);
+pub fn buttonAt(left: f32, island: RoundedBox) RectF {
     const centre_y = (island.rect.top + island.rect.bottom) * 0.5;
     const top = centre_y - start_button_dip * 0.5;
-    return .{ .left = right - start_button_dip, .top = top, .right = right, .bottom = top + start_button_dip };
+    return .{ .left = left, .top = top, .right = left + start_button_dip, .bottom = top + start_button_dip };
 }
 
 pub fn startButtonFor(island: RoundedBox) RectF {
-    return deckButtonFor(island, 0);
-}
-
-pub fn systemButtonFor(island: RoundedBox) RectF {
-    return deckButtonFor(island, 1);
-}
-
-pub fn systemButtonHit(island: RoundedBox, x: f32, y: f32) bool {
-    return containsRect(systemButtonFor(island), x, y);
+    return buttonAt(island.rect.left - dock_gap_dip - start_button_dip, island);
 }
 
 pub fn startButtonHit(island: RoundedBox, x: f32, y: f32) bool {
     return containsRect(startButtonFor(island), x, y);
 }
 
-pub fn statusStripFor(island: RoundedBox) RoundedBox {
-    const system = systemButtonFor(island);
-    const right = system.left - status_strip_gap_dip;
-    const centre_y = (island.rect.top + island.rect.bottom) * 0.5;
-    return .{
-        .rect = .{ .left = right - status_strip_width_dip, .top = centre_y - status_strip_height_dip * 0.5, .right = right, .bottom = centre_y + status_strip_height_dip * 0.5 },
-        .radius_x = status_strip_height_dip * 0.5,
-        .radius_y = status_strip_height_dip * 0.5,
-    };
-}
-
-pub fn statusStripFadeStep(amount: f32, wanted: bool, dt_seconds: f32) f32 {
-    return approachStep(amount, wanted, dt_seconds, status_strip_fade_seconds);
-}
-
 pub fn springStep(value: *f32, velocity: *f32, target: f32, dt_seconds: f32, omega: f32) bool {
-    const damping = 2 * spring_zeta * omega;
+    return springStepWithDamping(value, velocity, target, dt_seconds, omega, spring_zeta);
+}
+
+pub fn springStepWithDamping(
+    value: *f32,
+    velocity: *f32,
+    target: f32,
+    dt_seconds: f32,
+    omega: f32,
+    damping_ratio: f32,
+) bool {
+    const damping = 2 * damping_ratio * omega;
     const substep: f32 = 1.0 / 240.0;
     var remaining = std.math.clamp(dt_seconds, 0, 0.1);
     while (remaining > 0) {
@@ -88,49 +60,15 @@ pub fn controlWashStep(value: *f32, velocity: *f32, target: f32, dt_seconds: f32
     return springStep(value, velocity, target, dt_seconds, control_spring_omega);
 }
 
-pub fn trayButtonFor(island: RoundedBox) RectF {
-    const left = island.rect.right + control_pad_dip;
-    const top = (island.rect.top + island.rect.bottom) * 0.5 - tray_icon_dip * 0.5;
-    return .{ .left = left, .top = top, .right = left + tray_icon_dip, .bottom = top + tray_icon_dip };
-}
+pub const CardHang = enum { overflow_button, start_button, tray_button };
 
-pub fn trayButtonHit(island: RoundedBox, x: f32, y: f32) bool {
-    return containsRect(trayButtonFor(island), x, y);
-}
-
-pub fn trayButtonReservedDip() f32 {
-    return tray_icon_dip + control_gap_dip * 2;
-}
-
-pub fn barClusterFor(island: RoundedBox, tray_button_shown: bool) RoundedBox {
-    const left = systemButtonFor(island).left - control_gap_dip;
-    const right = (if (tray_button_shown) trayButtonFor(island).right else island.rect.right) + control_gap_dip;
-    const radius = (island.rect.bottom - island.rect.top) * 0.5;
-    return .{
-        .rect = .{ .left = left, .top = island.rect.top, .right = right, .bottom = island.rect.bottom },
-        .radius_x = radius,
-        .radius_y = radius,
-    };
-}
-
-pub const CardHang = enum { system_button, start_button, tray_button };
-
-pub fn deckCardAnchorCentre(island: RoundedBox, hang: CardHang) f32 {
+pub fn deckCardAnchorCentre(island: RoundedBox, hang: CardHang, overflow_button: RectF) f32 {
     const button = switch (hang) {
-        .system_button => systemButtonFor(island),
+        .overflow_button => overflow_button,
         .start_button => startButtonFor(island),
-        .tray_button => trayButtonFor(island),
+        .tray_button => overflow_button,
     };
     return (button.left + button.right) * 0.5;
-}
-
-fn approachStep(amount: f32, wanted: bool, dt_seconds: f32, duration: f32) f32 {
-    const dt = std.math.clamp(dt_seconds, 0, 0.1);
-    const step = dt / duration;
-    const target: f32 = if (wanted) 1 else 0;
-    if (amount < target) return @min(target, amount + step);
-    if (amount > target) return @max(target, amount - step);
-    return amount;
 }
 
 fn containsRect(rect: RectF, x: f32, y: f32) bool {
@@ -140,17 +78,28 @@ fn containsRect(rect: RectF, x: f32, y: f32) bool {
 pub fn smokeCheck() bool {
     const island = Motion.boxForState(.collapsed, Motion.anchorForWindow(0, 0, 1920, 0));
     const start = startButtonFor(island);
-    const system = systemButtonFor(island);
-    const tray = trayButtonFor(island);
-    if (start.right >= island.rect.left or system.right >= start.left) return false;
-    if (tray.left != island.rect.right + control_pad_dip or !trayButtonHit(island, tray.left, tray.top)) return false;
-    const cluster = barClusterFor(island, true);
-    if (cluster.rect.left >= system.left or cluster.rect.right <= tray.right) return false;
-    if (deckCardAnchorCentre(island, .start_button) != (start.left + start.right) * 0.5) return false;
-    if (statusStripFor(island).rect.right >= system.left) return false;
-    return trayButtonReservedDip() == tray_icon_dip + control_gap_dip * 2 and statusStripFadeStep(0, true, 0.1) == 0.5;
+    const overflow = buttonAt(island.rect.right + dock_gap_dip, island);
+    if (start.right + dock_gap_dip != island.rect.left or overflow.left != island.rect.right + dock_gap_dip) return false;
+    if (deckCardAnchorCentre(island, .start_button, overflow) != (start.left + start.right) * 0.5) return false;
+    return deckCardAnchorCentre(island, .overflow_button, overflow) == (overflow.left + overflow.right) * 0.5;
 }
 
-test "bar controls keep their island-relative hit and paint geometry" {
+test "start and overflow controls stay close to the island" {
     try std.testing.expect(smokeCheck());
+}
+
+test "underdamped spring overshoots then settles at its target" {
+    var value: f32 = 0;
+    var velocity: f32 = 0;
+    var overshot = false;
+    var peak_value: f32 = 0;
+    for (0..120) |_| {
+        _ = springStepWithDamping(&value, &velocity, 1, 1.0 / 60.0, 22, 0.52);
+        if (value > 1) overshot = true;
+        peak_value = @max(peak_value, value);
+    }
+    try std.testing.expect(overshot);
+    try std.testing.expect(peak_value > 1.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), value, 0.001);
+    try std.testing.expectEqual(@as(f32, 0), velocity);
 }

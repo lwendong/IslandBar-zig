@@ -4,13 +4,14 @@ pub const max_windows: usize = 32;
 pub const title_capacity: usize = 128;
 pub const WindowId = u64;
 
-/// Platform-neutral window instance facts. The native HWND remains private to
-/// WindowService; callers use this stable id to request an action.
+/// Platform-neutral task-group facts. A task represents all eligible windows
+/// for one executable; native HWNDs remain private to WindowService.
 pub const Entry = struct {
     id: WindowId = 0,
     process_id: u32 = 0,
     process_created_at: u64 = 0,
     iconic: bool = false,
+    window_count: usize = 1,
     title: [title_capacity]u16 = @splat(0),
 };
 

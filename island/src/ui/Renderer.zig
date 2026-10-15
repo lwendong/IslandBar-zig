@@ -6,7 +6,6 @@ const AppIcon = @import("AppIcon");
 const DrawLifecycle = @import("DrawLifecycle");
 const WicImage = @import("WicImage");
 const StatusLineWeather = @import("StatusLineWeather");
-const BarControlLayout = @import("BarControlLayout");
 const TaskbarPresentation = @import("TaskbarPresentation");
 const LayoutSnapshot = @import("LayoutSnapshot");
 const Theme = @import("Theme");
@@ -109,7 +108,6 @@ extern "kernel32" fn GetProcAddress(module: Handle, name: [*:0]const u8) callcon
 extern "user32" fn IsWindow(window: Handle) callconv(.winapi) i32;
 extern "user32" fn SendMessageTimeoutW(window: Handle, message: UINT, wparam: usize, lparam: isize, flags: UINT, timeout: UINT, result: *usize) callconv(.winapi) usize;
 extern "user32" fn GetClassLongPtrW(window: Handle, index: i32) callconv(.winapi) usize;
-extern "user32" fn GetWindowThreadProcessId(window: Handle, process_id: *u32) callconv(.winapi) u32;
 extern "user32" fn GetDC(window: Handle) callconv(.winapi) Handle;
 extern "user32" fn ReleaseDC(window: Handle, dc: Handle) callconv(.winapi) i32;
 extern "user32" fn DrawIconEx(dc: Handle, x: i32, y: i32, icon: Handle, width: i32, height: i32, step: u32, brush: Handle, flags: UINT) callconv(.winapi) i32;
@@ -216,6 +214,78 @@ fn release(object: *Handle) void {
     }
 }
 
+/// Lifts mid-tone details in a dark task icon while preserving its hue,
+/// transparent pixels, and near-black regions. This is an in-memory pixel
+/// pass; it never performs process or Shell icon queries.
+fn enhanceDarkIconPixels(pixels: []u8) bool {
+    if (pixels.len < 4 or pixels.len % 4 != 0) return false;
+
+    var luminance_sum: u64 = 0;
+    var visible_count: u64 = 0;
+    var offset: usize = 0;
+    while (offset < pixels.len) : (offset += 4) {
+        const alpha = @as(u32, pixels[offset + 3]);
+        if (alpha < 24) continue;
+        const blue: u32 = @min(255, (@as(u32, pixels[offset]) * 255 + alpha / 2) / alpha);
+        const green: u32 = @min(255, (@as(u32, pixels[offset + 1]) * 255 + alpha / 2) / alpha);
+        const red: u32 = @min(255, (@as(u32, pixels[offset + 2]) * 255 + alpha / 2) / alpha);
+        luminance_sum += (54 * red + 183 * green + 19 * blue) / 256;
+        visible_count += 1;
+    }
+    if (visible_count == 0 or luminance_sum >= visible_count * 190) return false;
+
+    offset = 0;
+    while (offset < pixels.len) : (offset += 4) {
+        const alpha = @as(u32, pixels[offset + 3]);
+        if (alpha < 24) continue;
+        const blue: u32 = @min(255, (@as(u32, pixels[offset]) * 255 + alpha / 2) / alpha);
+        const green: u32 = @min(255, (@as(u32, pixels[offset + 1]) * 255 + alpha / 2) / alpha);
+        const red: u32 = @min(255, (@as(u32, pixels[offset + 2]) * 255 + alpha / 2) / alpha);
+        const luminance = (54 * red + 183 * green + 19 * blue) / 256;
+        if (luminance <= 6 or luminance >= 210) continue;
+
+        const target_luminance = @min(210, 8 + (luminance - 8) * 2);
+        const highest_channel = @max(red, @max(green, blue));
+        const hue_preserving_limit = luminance * 255 / highest_channel;
+        const lifted_luminance = @min(target_luminance, hue_preserving_limit);
+        const lifted_blue = @min(255, (blue * lifted_luminance + luminance / 2) / luminance);
+        const lifted_green = @min(255, (green * lifted_luminance + luminance / 2) / luminance);
+        const lifted_red = @min(255, (red * lifted_luminance + luminance / 2) / luminance);
+        pixels[offset] = @intCast((lifted_blue * alpha + 127) / 255);
+        pixels[offset + 1] = @intCast((lifted_green * alpha + 127) / 255);
+        pixels[offset + 2] = @intCast((lifted_red * alpha + 127) / 255);
+    }
+    return true;
+}
+
+test "dark task icon enhancement lifts midtones without adding a background" {
+    var pixels = [_]u8{
+        0, 0, 0, 255, // opaque black remains black
+        96, 96, 96, 255, // gray detail is lifted
+        80, 80, 80, 0, // transparent RGB is untouched
+        200, 100, 100, 255, // color remains within the same hue
+    };
+
+    try std.testing.expect(enhanceDarkIconPixels(&pixels));
+    try std.testing.expectEqual(@as(u8, 0), pixels[0]);
+    try std.testing.expect(pixels[4] > 96);
+    try std.testing.expectEqual(@as(u8, 0), pixels[11]);
+    try std.testing.expectEqual(@as(u8, 255), pixels[7]);
+    try std.testing.expect(pixels[12] > 200);
+    try std.testing.expectEqual(pixels[13], pixels[14]);
+}
+
+test "bright task icons are unchanged" {
+    var pixels = [_]u8{
+        220, 220, 220, 255,
+        180, 180, 180, 255,
+    };
+    const original = pixels;
+
+    try std.testing.expect(!enhanceDarkIconPixels(&pixels));
+    try std.testing.expectEqualSlices(u8, &original, &pixels);
+}
+
 fn queryInterface(object: Handle, iid: *const Guid) ?*anyopaque {
     const raw = object orelse return null;
     const unknown: *Unknown = @ptrCast(@alignCast(raw));
@@ -235,17 +305,15 @@ pub const PillAppearance = struct {
     box: Geometry.RoundedBox = .{ .rect = .{} },
     resting_pill: Geometry.RoundedBox = .{ .rect = .{} },
     deck_box: ?Geometry.RoundedBox = null,
-    surface_box: ?Geometry.RoundedBox = null,
     fill: [4]f32 = .{ 0.05, 0.05, 0.07, 0.92 },
     opacity: f32 = 1,
     taskbar_view: ?*const TaskbarPresentation.View = null,
     start_hover: f32 = 0,
     start_open: bool = false,
     system_hover: f32 = 0,
-    system_open: bool = false,
-    tray_visible: bool = false,
     tray_hover: f32 = 0,
     tray_open: bool = false,
+    tray_entry_hover: f32 = 0,
     line_text: []const u8 = &.{},
     line_text_mode: enum { scrolling, static } = .scrolling,
     call_up: bool = false,
@@ -253,12 +321,12 @@ pub const PillAppearance = struct {
     fullscreen_app: bool = false,
     resting_state: Motion.IslandState = .collapsed,
     music_present: bool = false,
+    music_card_open: bool = false,
     lyric_scroll_dip: f32 = 0,
     lyric_line_roll: f32 = 1,
     lyric_line_prev: []const u8 = &.{},
     lyric_line_prev_scroll_dip: f32 = 0,
     status_weather: StatusLineWeather.View = .{},
-    status_strip_opacity: f32 = 0,
     content_card_painter: ?PagePainter.Painter = null,
     content_card_box: ?Geometry.RoundedBox = null,
     content_card_reveal: f32 = 0,
@@ -281,7 +349,6 @@ pub const FrameState = struct {
     resting_state: Motion.IslandState = .collapsed,
     clock: TextRenderer.ClockStyle = .compact,
     status_weather: StatusLineWeather.View = .{},
-    status_strip_opacity: f32 = 0,
     content_opacity: f32 = 1,
     card_opacity: f32 = 1,
     lyric_line_roll: f32 = 1,
@@ -310,12 +377,7 @@ pub const FrameState = struct {
     task_button_appear_valid: bool = false,
     task_hovered_index: i32 = -1,
     task_button_windows: [max_task_buttons]?*anyopaque = @splat(null),
-    tray_button_hovered: bool = false,
-    tray_button_wash: f32 = 0,
     start_wash: f32 = 0,
-    system_button_hovered: bool = false,
-    system_button_wash: f32 = 0,
-    system_button_open: bool = false,
     start_button_open: bool = false,
     system_panel_open: bool = false,
     system_panel: TextRenderer.SystemPanelText = .{},
@@ -608,11 +670,11 @@ pub const DeviceResources = struct {
         const transparent = D2DColor{ .r = 0, .g = 0, .b = 0, .a = 0 };
         clear(self.d2d_context.?, &transparent);
 
-        const surface_box = pill.surface_box orelse pill.box;
+        const surface_box = pill.box;
         const rect = surface_box.rect;
         if (pill.opacity > 0.001 and rect.right > rect.left and rect.bottom > rect.top) {
             if (text_renderer) |text| {
-                text.drawPillSurface(self.d2d_context, surface_box, pill.deck_box, pill.opacity);
+                text.drawPillSurface(self.d2d_context, surface_box, null, pill.opacity);
             } else if (fallback_brush) |brush| {
                 const rounded = D2DRoundedRect{
                     .rect = .{ .left = rect.left, .top = rect.top, .right = rect.right, .bottom = rect.bottom },
@@ -627,6 +689,9 @@ pub const DeviceResources = struct {
             if (text_renderer) |text| {
                 if (pill.call_up) {
                     text.drawCallStrip(self.d2d_context, pill.box, pill.call_strip, pill.opacity);
+                } else if (pill.music_card_open) {
+                    // The expanded music card gets a dedicated clock/weather cap
+                    // after its contents are painted below.
                 } else if (pill.line_text.len != 0) {
                     if (pill.line_text_mode == .static) {
                         if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, pill.opacity)) return false;
@@ -646,21 +711,6 @@ pub const DeviceResources = struct {
                         return false;
                     }
                 }
-            }
-        }
-
-        if (pill.opacity > 0.001 and pill.status_strip_opacity > 0.01 and !pill.fullscreen_app) {
-            if (text_renderer) |text| {
-                const bar_island = if (Geometry.width(pill.resting_pill.rect) > 0)
-                    Motion.rowAnchorBox(pill.box, pill.resting_pill)
-                else
-                    pill.box;
-                var strip = BarControlLayout.statusStripFor(bar_island);
-                const slide = (1 - pill.status_strip_opacity) * 6;
-                strip.rect.left += slide;
-                strip.rect.right += slide;
-                text.drawPillSurface(self.d2d_context, strip, strip, pill.status_strip_opacity * pill.opacity);
-                if (!text.drawStatusLine(self.d2d_context, strip, pill.status_strip_opacity * pill.opacity, pill.status_weather)) return false;
             }
         }
 
@@ -711,6 +761,20 @@ pub const DeviceResources = struct {
             }
         }
 
+        if (pill.opacity > 0.001 and pill.music_card_open and !pill.fullscreen_app) {
+            if (text_renderer) |text| {
+                const top = pill.box.rect.top + 6;
+                const reveal_opacity = std.math.clamp(pill.feature_page_reveal / 48, 0, 1);
+                const header = Geometry.RoundedBox{
+                    .rect = .{ .left = pill.box.rect.left + 6, .top = top, .right = pill.box.rect.right - 6, .bottom = top + 48 },
+                    .radius_x = 24,
+                    .radius_y = 24,
+                };
+                text.drawPillSurface(self.d2d_context, header, null, pill.opacity * reveal_opacity);
+                if (!text.drawStatusLine(self.d2d_context, header, pill.opacity * reveal_opacity, pill.status_weather)) return false;
+            }
+        }
+
         // The task row is drawn after the expanded card so its buttons stay
         // visible where the card overlaps the desktop strip, matching the
         // original Renderer::DrawDecks order.
@@ -719,24 +783,29 @@ pub const DeviceResources = struct {
                 if (pill.taskbar_view) |view| {
                     var resolved_buttons = view.buttons;
                     const count = @min(view.count, resolved_buttons.len);
-                    self.pruneWindowIconCache(resolved_buttons[0..count]);
-                    for (resolved_buttons[0..count]) |*button| {
+                    var overflow_buttons = view.overflow_buttons;
+                    const overflow_count = @min(view.overflow_count, overflow_buttons.len);
+                    var all_buttons: [max_task_buttons]TextRenderer.TaskButton = @splat(.{});
+                    @memcpy(all_buttons[0..count], resolved_buttons[0..count]);
+                    @memcpy(all_buttons[count .. count + overflow_count], overflow_buttons[0..overflow_count]);
+                    self.pruneWindowIconCache(all_buttons[0 .. count + overflow_count]);
+                    for (all_buttons[0 .. count + overflow_count]) |*button| {
                         button.icon = self.iconForWindow(button.*);
                     }
+                    @memcpy(resolved_buttons[0..count], all_buttons[0..count]);
+                    @memcpy(overflow_buttons[0..overflow_count], all_buttons[count .. count + overflow_count]);
                     if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], pill.opacity)) return false;
+                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, pill.opacity)) return false;
                 }
             }
         }
 
-        // The two left controls and the tray button hang from the pill. They are
-        // drawn from the same anchor used by hit testing so their targets stay
-        // under their visible marks in every island state.
+        // Dock controls are independent surfaces packed around the island.
         if (pill.opacity > 0.001 and !pill.fullscreen_app) {
             if (text_renderer) |text| {
                 const deck = pill.deck_box orelse pill.box;
                 text.drawStartButton(self.d2d_context, deck, pill.start_hover, pill.start_open, pill.opacity);
-                text.drawSystemButton(self.d2d_context, deck, pill.system_hover, pill.system_open, pill.opacity);
-                if (pill.tray_visible) text.drawTrayButton(self.d2d_context, deck, pill.tray_hover, pill.tray_open, pill.opacity);
+                if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, pill.tray_open, pill.opacity);
             }
         }
 
@@ -990,9 +1059,7 @@ pub const DeviceResources = struct {
         // Protected processes may refuse WM_GETICON and process queries; when
         // the latter succeeds, use the executable's associated icon as the
         // same fallback as Renderer::IconForWindow.
-        var process_id: u32 = 0;
-        _ = GetWindowThreadProcessId(window, &process_id);
-        if (process_id == 0) return null;
+        const process_id = button.process_id;
         const process = OpenProcess(process_query_limited_information, 0, process_id) orelse return null;
         defer _ = CloseHandle(process);
         var executable_path: [260]u16 = @splat(0);
@@ -1005,7 +1072,16 @@ pub const DeviceResources = struct {
         var decoded = WicImage.DecodedImage{};
         if (!WicImage.decodeImage(png[0..png_length], &decoded, .other) or decoded.width <= 0 or decoded.height <= 0) return null;
         const pixels = decoded.pixels orelse return null;
-        self.window_icons[slot_index].bitmap = self.createIconBitmap(@intCast(decoded.width), @intCast(decoded.height), pixels);
+        const width: u32 = @intCast(decoded.width);
+        const height: u32 = @intCast(decoded.height);
+        if (width == 32 and height == 32) {
+            var executable_icon_pixels: [32 * 32 * 4]u8 = undefined;
+            @memcpy(executable_icon_pixels[0..], pixels[0..executable_icon_pixels.len]);
+            _ = enhanceDarkIconPixels(executable_icon_pixels[0..]);
+            self.window_icons[slot_index].bitmap = self.createIconBitmap(width, height, &executable_icon_pixels);
+        } else {
+            self.window_icons[slot_index].bitmap = self.createIconBitmap(width, height, pixels);
+        }
         return self.window_icons[slot_index].bitmap;
     }
 
@@ -1060,8 +1136,10 @@ pub const DeviceResources = struct {
         _ = GdiFlush();
         _ = SelectObject(memory, previous);
         const pixel_memory = bits orelse return null;
-        const pixels: [*]const u8 = @ptrCast(pixel_memory);
-        return self.createIconBitmap(32, 32, pixels);
+        const pixels: [*]u8 = @ptrCast(pixel_memory);
+        const icon_pixels = pixels[0 .. 32 * 32 * 4];
+        _ = enhanceDarkIconPixels(icon_pixels);
+        return self.createIconBitmap(32, 32, icon_pixels.ptr);
     }
 
     pub fn initialize(self: *DeviceResources, window: Handle, width_px: UINT, height_px: UINT, scale_arg: f32) bool {
@@ -1354,50 +1432,29 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
             const blank_luminance = resources.regionLuminance(blank_region) catch return false;
             if (title_luminance <= blank_luminance) return false;
 
-            const task_title_storage = [_:0]u16{
-                'A', 'c', 't', 'i', 'v', 'e', ' ', 0xD83D, 0xDE80, ' ', 'w', 'i', 'n', 'd', 'o', 'w', ' ',
-                't', 'i', 't', 'l', 'e', ' ', 't', 'h',    'a',    't', ' ', 'n', 'e', 'e', 'd', 's', ' ',
-                'a', 'n', ' ', 'e', 'l', 'l', 'i', 'p',    's',    'i', 's',
-            };
-            const task_title: [*:0]const u16 = &task_title_storage;
-            var task_buttons = [_]TextRenderer.TaskButton{
-                .{ .window_id = 1, .title = task_title, .active = true, .hover_amount = 1 },
+            const task_buttons = [_]TextRenderer.TaskButton{
+                .{ .window_id = 1, .active = true },
             };
             var task_pill = card_pill;
             const task_island = Motion.boxForState(.collapsed, Motion.anchorForWindow(0, 0, @floatFromInt(width_px), 0));
             var task_view = TaskbarPresentation.View{};
             task_view.count = 1;
             task_view.buttons[0] = task_buttons[0];
-            task_view.buttons[0].bounds = .{ .left = task_island.rect.right + 8, .top = task_island.rect.top + 3, .right = task_island.rect.right + 132, .bottom = task_island.rect.bottom - 3 };
-            task_view.buttons[0].icon_bounds = .{ .left = task_view.buttons[0].bounds.left + 5, .top = task_island.rect.top + 8, .right = task_view.buttons[0].bounds.left + 25, .bottom = task_island.rect.top + 28 };
-            task_view.buttons[0].title_bounds = .{ .left = task_view.buttons[0].icon_bounds.right + 8, .top = task_view.buttons[0].bounds.top, .right = task_view.buttons[0].bounds.right - 8, .bottom = task_view.buttons[0].bounds.bottom };
+            const task_button_dip: f32 = 38;
+            const task_icon_dip: f32 = 26;
+            const task_icon_inset = (task_button_dip - task_icon_dip) * 0.5;
+            const task_left = task_island.rect.right + 12;
+            const task_top = (task_island.rect.top + task_island.rect.bottom) * 0.5 - task_button_dip * 0.5;
+            task_view.buttons[0].bounds = .{ .left = task_left, .top = task_top, .right = task_left + task_button_dip, .bottom = task_top + task_button_dip };
+            task_view.buttons[0].icon_bounds = .{
+                .left = task_left + task_icon_inset,
+                .top = task_top + task_icon_inset,
+                .right = task_left + task_icon_inset + task_icon_dip,
+                .bottom = task_top + task_icon_inset + task_icon_dip,
+            };
             task_pill.taskbar_view = &task_view;
-            check_stage = "task title rendering";
+            check_stage = "circular task button rendering";
             if (!resources.renderPill(task_pill, text, .card)) return false;
-
-            const task_title_box = task_view.buttons[0].title_bounds;
-            const task_text_region = Geometry.RectF{
-                .left = task_title_box.left,
-                .top = task_title_box.top,
-                .right = task_title_box.right,
-                .bottom = task_title_box.bottom,
-            };
-            const task_blank_region = Geometry.RectF{
-                .left = task_title_box.right + 1,
-                .top = task_title_box.top,
-                .right = task_title_box.right + 7,
-                .bottom = task_title_box.bottom,
-            };
-            const active_text_luminance = resources.regionLuminance(task_text_region) catch return false;
-            const active_blank_luminance = resources.regionLuminance(task_blank_region) catch return false;
-            if (active_text_luminance <= active_blank_luminance) return false;
-
-            task_buttons[0].active = false;
-            check_stage = "inactive task title rendering";
-            if (!resources.renderPill(task_pill, text, .card)) return false;
-            const inactive_text_luminance = resources.regionLuminance(task_text_region) catch return false;
-            const inactive_blank_luminance = resources.regionLuminance(task_blank_region) catch return false;
-            if (inactive_text_luminance <= inactive_blank_luminance) return false;
         }
         check_stage = "compositor opacity animation";
         if (!resources.animateOpacity(0, 1, 0.15)) return false;
@@ -1432,7 +1489,6 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
         @memcpy(music_weather.sky[0..2], &[_]u16{ 0x6679, 0x5929 });
         @memcpy(music_weather.temperature[0..3], &[_]u16{ '2', '1', 0x00b0 });
         music_pill.status_weather = music_weather;
-        music_pill.status_strip_opacity = 0.8;
         check_stage = "music strip rendering";
         if (!resources.renderPill(music_pill, text, .compact)) return false;
 
@@ -1511,7 +1567,7 @@ pub fn smokeCheck() bool {
     var resources = DeviceResources{};
     if (!resources.createDeviceResources()) return false;
     defer resources.shutdown();
-    if (!resources.createSwapChain(220, 36)) return false;
+    if (!resources.createSwapChain(@intFromFloat(Geometry.pill_width_dip), @intFromFloat(Geometry.pill_height_dip))) return false;
     return resources.swap_chain != null and resources.surface_width > 0 and resources.surface_height > 0 and
         contentStrengthsFor(true, 0, true).card == 0.35 and
         contentStrengthsFor(true, 0.35, true).card == 0.35 and

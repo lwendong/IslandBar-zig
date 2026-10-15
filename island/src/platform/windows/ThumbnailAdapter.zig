@@ -1,7 +1,7 @@
 const std = @import("std");
 const ThumbnailContract = @import("ThumbnailContract");
 
-pub const radius_dip: f32 = 12;
+pub const radius_dip: f32 = 18;
 
 const HANDLE = ?*anyopaque;
 const HWND = HANDLE;
@@ -80,7 +80,6 @@ extern "user32" fn SetWindowPos(window: HWND, after: HWND, x: i32, y: i32, width
 extern "user32" fn SetWindowRgn(window: HWND, region: HRGN, redraw: BOOL) callconv(.winapi) i32;
 extern "user32" fn InvalidateRect(window: HWND, rect: ?*const Rect, erase: BOOL) callconv(.winapi) BOOL;
 extern "user32" fn GetWindowTextW(window: HWND, text: [*]u16, max_count: i32) callconv(.winapi) i32;
-extern "user32" fn SendMessageTimeoutW(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM, flags: UINT, timeout: UINT, result: *usize) callconv(.winapi) LRESULT;
 extern "user32" fn GetClassLongPtrW(window: HWND, index: i32) callconv(.winapi) usize;
 extern "user32" fn GetClientRect(window: HWND, rect: *Rect) callconv(.winapi) BOOL;
 extern "user32" fn DrawIconEx(dc: HDC, x: i32, y: i32, icon: HICON, width: i32, height: i32, step: UINT, brush: HBRUSH, flags: UINT) callconv(.winapi) BOOL;
@@ -103,6 +102,7 @@ extern "dwmapi" fn DwmRegisterThumbnail(destination: HWND, source: HWND, thumbna
 extern "dwmapi" fn DwmUnregisterThumbnail(thumbnail: HTHUMBNAIL) callconv(.winapi) i32;
 extern "dwmapi" fn DwmQueryThumbnailSourceSize(thumbnail: HTHUMBNAIL, size: *Size) callconv(.winapi) i32;
 extern "dwmapi" fn DwmUpdateThumbnailProperties(thumbnail: HTHUMBNAIL, properties: *const ThumbnailProperties) callconv(.winapi) i32;
+extern "dwmapi" fn DwmSetWindowAttribute(window: HWND, attribute: DWORD, value: *const anyopaque, size: DWORD) callconv(.winapi) i32;
 
 const ws_ex_topmost: DWORD = 0x00000008;
 const ws_ex_toolwindow: DWORD = 0x00000080;
@@ -115,10 +115,7 @@ const wm_nccreate: UINT = 0x0081;
 const wm_erasebkgnd: UINT = 0x0014;
 const wm_paint: UINT = 0x000f;
 const wm_nchittest: UINT = 0x0084;
-const wm_geticon: UINT = 0x007f;
-const icon_big: WPARAM = 1;
-const icon_small2: WPARAM = 2;
-const smto_abortifhung: UINT = 0x0002;
+const gclp_hicon: i32 = -14;
 const gclp_hiconsm: i32 = -34;
 const gwlp_userdata: i32 = -21;
 const httransparent: LRESULT = -1;
@@ -129,6 +126,8 @@ const dwm_tnp_rectdestination: DWORD = 0x00000001;
 const dwm_tnp_rectsource: DWORD = 0x00000002;
 const dwm_tnp_opacity: DWORD = 0x00000004;
 const dwm_tnp_visible: DWORD = 0x00000008;
+const dwmwa_window_corner_preference: DWORD = 33;
+const dwmcp_round: i32 = 2;
 const dt_left: UINT = 0;
 const dt_vcenter: UINT = 0x00000004;
 const dt_singleline: UINT = 0x00000020;
@@ -146,6 +145,23 @@ const thumbnail_class_name: [*:0]const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', '
 const window_name: [*:0]const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', 'B', 'a', 'r', ' ', 'p', 'r', 'e', 'v', 'i', 'e', 'w', 0 };
 const face_name: [*:0]const u16 = &.{ 'S', 'e', 'g', 'o', 'e', ' ', 'U', 'I', ' ', 'V', 'a', 'r', 'i', 'a', 'b', 'l', 'e', ' ', 'T', 'e', 'x', 't', 0 };
 
+fn sameRect(a: Rect, b: Rect) bool {
+    return a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom;
+}
+
+fn sameSize(a: Size, b: Size) bool {
+    return a.cx == b.cx and a.cy == b.cy;
+}
+
+fn rectRelativeTo(rect: Rect, origin: Rect) Rect {
+    return .{
+        .left = rect.left - origin.left,
+        .top = rect.top - origin.top,
+        .right = rect.right - origin.left,
+        .bottom = rect.bottom - origin.top,
+    };
+}
+
 fn rgb(red: u8, green: u8, blue: u8) DWORD {
     return @as(DWORD, red) | (@as(DWORD, green) << 8) | (@as(DWORD, blue) << 16);
 }
@@ -154,8 +170,14 @@ pub const ThumbnailAdapter = struct {
     hwnd: HWND = null,
     source: HWND = null,
     thumbnail: HTHUMBNAIL = null,
+    dwm_round_corners: bool = false,
+    region_set: bool = false,
+    thumbnail_dirty: bool = true,
+    chrome_dirty: bool = true,
     source_size: Size = .{ .cx = 0, .cy = 0 },
+    placed_source_size: Size = .{ .cx = 0, .cy = 0 },
     card: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+    header: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     picture: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     title: [256]u16 = @splat(0),
     icon: HICON = null,
@@ -183,6 +205,11 @@ pub const ThumbnailAdapter = struct {
         if (RegisterClassExW(&window_class) == 0 and GetLastError() != error_class_already_exists) return false;
         const style = ws_ex_topmost | ws_ex_noactivate | ws_ex_toolwindow;
         self.hwnd = CreateWindowExW(style, thumbnail_class_name, window_name, ws_popup, 0, 0, 1, 1, owner, null, instance, self);
+        self.dwm_round_corners = false;
+        if (self.hwnd) |window| {
+            const preference = dwmcp_round;
+            self.dwm_round_corners = DwmSetWindowAttribute(window, dwmwa_window_corner_preference, @ptrCast(&preference), @sizeOf(i32)) >= 0;
+        }
         return self.hwnd != null;
     }
 
@@ -197,6 +224,13 @@ pub const ThumbnailAdapter = struct {
         }
         self.source = null;
         self.visible = false;
+        self.dwm_round_corners = false;
+        self.region_set = false;
+        self.thumbnail_dirty = true;
+        self.chrome_dirty = true;
+        self.source_size = .{ .cx = 0, .cy = 0 };
+        self.placed_source_size = .{ .cx = 0, .cy = 0 };
+        self.header = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 };
     }
 
     pub fn ready(self: *const ThumbnailAdapter) bool {
@@ -207,6 +241,9 @@ pub const ThumbnailAdapter = struct {
         const window = self.hwnd orelse return .{ .cx = 0, .cy = 0 };
         if (source == null or IsWindow(source) == 0) return .{ .cx = 0, .cy = 0 };
         if (self.source != source or self.thumbnail == null) {
+            self.thumbnail_dirty = true;
+            self.chrome_dirty = true;
+            self.placed_source_size = .{ .cx = 0, .cy = 0 };
             if (self.thumbnail) |thumbnail| {
                 _ = DwmUnregisterThumbnail(thumbnail);
                 self.thumbnail = null;
@@ -223,14 +260,9 @@ pub const ThumbnailAdapter = struct {
             self.source = source;
             self.title = @splat(0);
             _ = GetWindowTextW(source, &self.title, @intCast(self.title.len));
-            var result_icon: usize = 0;
-            if (SendMessageTimeoutW(source, wm_geticon, icon_small2, 0, smto_abortifhung, 100, &result_icon) == 0) result_icon = 0;
-            self.icon = if (result_icon == 0) null else @ptrFromInt(result_icon);
-            if (self.icon == null and SendMessageTimeoutW(source, wm_geticon, icon_big, 0, smto_abortifhung, 100, &result_icon) != 0 and result_icon != 0) self.icon = @ptrFromInt(result_icon);
-            if (self.icon == null) {
-                const class_icon = GetClassLongPtrW(source, gclp_hiconsm);
-                if (class_icon != 0) self.icon = @ptrFromInt(class_icon);
-            }
+            var class_icon = GetClassLongPtrW(source, gclp_hiconsm);
+            if (class_icon == 0) class_icon = GetClassLongPtrW(source, gclp_hicon);
+            self.icon = if (class_icon == 0) null else @ptrFromInt(class_icon);
         }
         self.source_size = .{ .cx = 0, .cy = 0 };
         if (self.thumbnail) |thumbnail| _ = DwmQueryThumbnailSourceSize(thumbnail, &self.source_size);
@@ -241,33 +273,65 @@ pub const ThumbnailAdapter = struct {
         const window = self.hwnd orelse return false;
         const thumbnail = self.thumbnail orelse return false;
         if (!placement.valid) return false;
-        self.card = placement.card;
-        self.picture = placement.picture;
-        const card_width = self.card.right - self.card.left;
-        const card_height = self.card.bottom - self.card.top;
-        if (CreateRoundRectRgn(0, 0, card_width + 1, card_height + 1, @intFromFloat(radius_dip * 2), @intFromFloat(radius_dip * 2))) |region| {
-            _ = SetWindowRgn(window, region, 1);
-        }
-        const topmost: HWND = @ptrFromInt(std.math.maxInt(usize));
-        _ = SetWindowPos(window, topmost, self.card.left, self.card.top, card_width, card_height, swp_noactivate | swp_showwindow);
-        self.visible = true;
-        _ = InvalidateRect(window, null, 1);
-        var properties = ThumbnailProperties{
-            .flags = dwm_tnp_rectdestination | dwm_tnp_rectsource | dwm_tnp_opacity | dwm_tnp_visible,
-            .destination = .{ .left = self.picture.left - self.card.left, .top = self.picture.top - self.card.top, .right = self.picture.right - self.card.left, .bottom = self.picture.bottom - self.card.top },
-            .source = .{ .left = 0, .top = 0, .right = self.source_size.cx, .bottom = self.source_size.cy },
-            .opacity = 255,
-            .visible = 1,
-            .source_client_area_only = 0,
+        const card_changed = !sameRect(self.card, placement.card);
+        const was_visible = self.visible;
+        const previous_card_size = Size{
+            .cx = self.card.right - self.card.left,
+            .cy = self.card.bottom - self.card.top,
         };
-        const result = DwmUpdateThumbnailProperties(thumbnail, &properties);
-        self.last_result = result;
-        if (result < 0) {
-            self.refusals += 1;
-            _ = ShowWindow(window, sw_hide);
-            self.visible = false;
-            return false;
+        const next_card_size = Size{
+            .cx = placement.card.right - placement.card.left,
+            .cy = placement.card.bottom - placement.card.top,
+        };
+        const card_size_changed = !sameSize(previous_card_size, next_card_size);
+        const previous_header = rectRelativeTo(self.header, self.card);
+        const next_header = rectRelativeTo(placement.header, placement.card);
+        const header_changed = !sameRect(previous_header, next_header);
+        const previous_destination = rectRelativeTo(self.picture, self.card);
+        const next_destination = rectRelativeTo(placement.picture, placement.card);
+        const destination_changed = !sameRect(previous_destination, next_destination);
+        const source_size_changed = !sameSize(self.placed_source_size, self.source_size);
+        const update_thumbnail = self.thumbnail_dirty or destination_changed or source_size_changed or !was_visible;
+        const repaint_chrome = self.chrome_dirty or card_size_changed or header_changed or destination_changed;
+        self.card = placement.card;
+        self.header = placement.header;
+        self.picture = placement.picture;
+        const card_width = next_card_size.cx;
+        const card_height = next_card_size.cy;
+        if (!self.dwm_round_corners and (!self.region_set or card_size_changed)) {
+            const header_height_px = placement.header.bottom - placement.header.top;
+            const corner_diameter_px = @max(1, @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(header_height_px)) * (radius_dip * 2 / 38)))));
+            if (CreateRoundRectRgn(0, 0, card_width + 1, card_height + 1, corner_diameter_px, corner_diameter_px)) |region| {
+                self.region_set = SetWindowRgn(window, region, 1) != 0;
+            }
         }
+        if (card_changed or !was_visible) {
+            const topmost: HWND = @ptrFromInt(std.math.maxInt(usize));
+            _ = SetWindowPos(window, topmost, self.card.left, self.card.top, card_width, card_height, swp_noactivate | swp_showwindow);
+        }
+        self.visible = true;
+        if (repaint_chrome) _ = InvalidateRect(window, null, 0);
+        if (update_thumbnail) {
+            var properties = ThumbnailProperties{
+                .flags = dwm_tnp_rectdestination | dwm_tnp_rectsource | dwm_tnp_opacity | dwm_tnp_visible,
+                .destination = next_destination,
+                .source = .{ .left = 0, .top = 0, .right = self.source_size.cx, .bottom = self.source_size.cy },
+                .opacity = 255,
+                .visible = 1,
+                .source_client_area_only = 0,
+            };
+            const result = DwmUpdateThumbnailProperties(thumbnail, &properties);
+            self.last_result = result;
+            if (result < 0) {
+                self.refusals += 1;
+                _ = ShowWindow(window, sw_hide);
+                self.visible = false;
+                return false;
+            }
+            self.placed_source_size = self.source_size;
+            self.thumbnail_dirty = false;
+        }
+        self.chrome_dirty = false;
         return true;
     }
 
@@ -287,6 +351,7 @@ pub const ThumbnailAdapter = struct {
         const picture_bottom = self.picture.bottom - self.card.top;
         const picture_left = self.picture.left - self.card.left;
         const picture_right = self.picture.right - self.card.left;
+        const header = rectRelativeTo(self.header, self.card);
         const card_brush = CreateSolidBrush(rgb(18, 18, 22));
         if (card_brush) |brush| {
             const bands = [_]Rect{
@@ -300,24 +365,27 @@ pub const ThumbnailAdapter = struct {
             }
             _ = DeleteObject(brush);
         }
-        const line_brush = CreateSolidBrush(rgb(56, 56, 66));
-        if (line_brush) |brush| {
-            var divider = Rect{ .left = client.left, .top = picture_top - 1, .right = client.right, .bottom = picture_top };
-            if (divider.bottom > divider.top) _ = FillRect(dc, &divider, brush);
+        const header_brush = CreateSolidBrush(rgb(24, 26, 32));
+        if (header_brush) |brush| {
+            if (header.bottom > header.top) _ = FillRect(dc, &header, brush);
             _ = DeleteObject(brush);
         }
-        const icon_size = 16;
-        var text_left: i32 = 10;
+        const header_height = header.bottom - header.top;
+        const icon_size = @min(22, @max(16, @divTrunc(header_height, 2)));
+        const header_padding = @max(10, @divTrunc(header_height, 3));
+        var text_left = header.left + header_padding;
         if (self.icon) |icon| {
-            _ = DrawIconEx(dc, 10, @divTrunc(picture_top - icon_size, 2), icon, icon_size, icon_size, 0, null, di_normal);
-            text_left = 34;
+            const icon_top = header.top + @divTrunc(header_height - icon_size, 2);
+            _ = DrawIconEx(dc, header.left + header_padding, icon_top, icon, icon_size, icon_size, 0, null, di_normal);
+            text_left += icon_size + @max(8, @divTrunc(header_height, 4));
         }
-        if (self.title[0] != 0 and text_left < client.right - 16) {
+        if (self.title[0] != 0 and text_left < header.right - header_padding) {
             _ = SetBkMode(dc, transparent);
-            _ = SetTextColor(dc, rgb(214, 219, 228));
-            const font = CreateFontW(-13, 0, 0, 0, fw_normal, 0, 0, 0, default_char_set, out_default_precision, clip_default_precision, cleartype_quality, default_pitch, face_name);
+            _ = SetTextColor(dc, rgb(238, 241, 248));
+            const font_height: i32 = @max(14, @divTrunc(header_height * 14, 38));
+            const font = CreateFontW(-font_height, 0, 0, 0, 500, 0, 0, 0, default_char_set, out_default_precision, clip_default_precision, cleartype_quality, default_pitch, face_name);
             const old_font = if (font != null) SelectObject(dc, font) else null;
-            var text_rect = Rect{ .left = text_left, .top = 0, .right = client.right - 12, .bottom = picture_top };
+            var text_rect = Rect{ .left = text_left, .top = header.top, .right = header.right - header_padding, .bottom = header.bottom };
             _ = DrawTextW(dc, @ptrCast(&self.title), -1, &text_rect, dt_left | dt_vcenter | dt_singleline | dt_end_ellipsis);
             if (font) |object| {
                 if (old_font) |old| _ = SelectObject(dc, old);

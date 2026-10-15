@@ -26,22 +26,21 @@ pub fn scrollingLineFadeDip(strip_width_dip: f32) f32 {
 
 pub const ClockStyle = enum(i32) { compact = 0, card = 1 };
 
-/// One application window button on the taskbar row.
+/// One application group button on the taskbar row. Window count and the
+/// representative live window are carried by the platform-neutral task data.
 pub const TaskButton = struct {
     window_id: u64 = 0,
     process_id: u32 = 0,
     process_created_at: u64 = 0,
+    window_count: usize = 1,
     title: ?[*:0]const u16 = null,
     window: ?*anyopaque = null,
     icon: ?*anyopaque = null,
     bounds: Geometry.RectF = .{},
     icon_bounds: Geometry.RectF = .{},
     title_bounds: Geometry.RectF = .{},
+    hover_progress: f32 = 0,
     active: bool = false,
-    minimised: bool = false,
-    fill: [4]f32 = .{ 0, 0, 0, 0 },
-    hover_amount: f32 = 0,
-    appear_amount: f32 = 1,
 };
 
 /// Feature supplied content for the reusable media-card drawing primitive.
@@ -206,9 +205,8 @@ pub const TextRenderer = struct {
     factory: Handle = null,
     time_format: Handle = null,
     date_format: Handle = null,
-    status_weekday_format: Handle = null,
-    status_day_format: Handle = null,
     status_time_format: Handle = null,
+    status_clock_time_format: Handle = null,
     status_weather_format: Handle = null,
     pill_line_format: Handle = null,
     card_caption_format: Handle = null,
@@ -243,8 +241,6 @@ pub const TextRenderer = struct {
     grain_context: Handle = null,
     time_text: [16]u16 = @splat(0),
     date_text: [32]u16 = @splat(0),
-    weekday_text: [8]u16 = @splat(0),
-    day_text: [24]u16 = @splat(0),
     last_hour: u16 = std.math.maxInt(u16),
     last_minute: u16 = std.math.maxInt(u16),
     last_year: u16 = 0,
@@ -259,10 +255,9 @@ pub const TextRenderer = struct {
         }
         if (!self.createFormat(font_family_display, 600, 15, &self.time_format) or
             !self.createFormat(font_family_text, 400, 12, &self.date_format) or
-            !self.createFormat(font_family_text, 400, 11.5, &self.status_weekday_format) or
-            !self.createFormat(font_family_text, 400, 11.5, &self.status_day_format) or
             !self.createFormat(font_family_text, 600, 13, &self.status_time_format) or
-            !self.createFormat(font_family_text, 400, 11.5, &self.status_weather_format) or
+            !self.createCenteredStatusFormat(font_family_text, 600, 20, &self.status_clock_time_format) or
+            !self.createCenteredStatusFormat(font_family_text, 400, 16, &self.status_weather_format) or
             !self.createCenteredPageFormat(700, 11, &self.pill_line_format) or
             !self.createFormat(font_family_text, 400, 11.5, &self.panel_label_format) or
             !self.createFormat(font_family_icons, 400, 18, &self.panel_icon_format) or
@@ -299,6 +294,16 @@ pub const TextRenderer = struct {
         return align_text(out.*.?, 2) >= 0 and align_paragraph(out.*.?, 1) >= 0 and no_wrap(out.*.?, 1) >= 0;
     }
 
+    /// Center only the compact island status formats; other UI styles keep
+    /// their current paragraph alignment.
+    fn createCenteredStatusFormat(self: *TextRenderer, family: [*:0]const u16, weight: u32, size: f32, out: *Handle) bool {
+        if (!self.createFormat(family, weight, size, out)) return false;
+        const align_paragraph = comMethod(*const fn (*anyopaque, i32) callconv(.winapi) HResult, out.*.?, 4);
+        if (align_paragraph(out.*.?, 2) >= 0) return true;
+        releaseCom(out);
+        return false;
+    }
+
     fn createTextStyleFormat(self: *TextRenderer, weight: u32, size: f32, wrap: bool, out: *Handle) bool {
         const factory = self.factory orelse return false;
         const create = comMethod(*const fn (*anyopaque, [*:0]const u16, Handle, u32, u32, u32, f32, [*:0]const u16, *Handle) callconv(.winapi) HResult, factory, 15);
@@ -320,16 +325,15 @@ pub const TextRenderer = struct {
         return align_text(out.*.?, 0) >= 0 and align_paragraph(out.*.?, 1) >= 0 and no_wrap(out.*.?, 1) >= 0;
     }
 
-    /// Matches the centered 11 DIP task title format used by the C++ renderer.
-    /// It keeps DirectWrite's default wrapping because the caller applies a
-    /// character-level ellipsis to the one-line task title before drawing.
+    /// One-line, leading-aligned title; the caller applies a character-level ellipsis.
     fn createTaskTitleFormat(self: *TextRenderer, out: *Handle) bool {
         const factory = self.factory orelse return false;
         const create = comMethod(*const fn (*anyopaque, [*:0]const u16, Handle, u32, u32, u32, f32, [*:0]const u16, *Handle) callconv(.winapi) HResult, factory, 15);
         if (create(factory, font_family_text, null, 400, 0, 5, 11, locale_zh_cn, out) < 0 or out.* == null) return false;
         const align_text = comMethod(*const fn (*anyopaque, i32) callconv(.winapi) HResult, out.*.?, 3);
         const align_paragraph = comMethod(*const fn (*anyopaque, i32) callconv(.winapi) HResult, out.*.?, 4);
-        return align_text(out.*.?, 2) >= 0 and align_paragraph(out.*.?, 1) >= 0;
+        const no_wrap = comMethod(*const fn (*anyopaque, i32) callconv(.winapi) HResult, out.*.?, 5);
+        return align_text(out.*.?, 0) >= 0 and align_paragraph(out.*.?, 1) >= 0 and no_wrap(out.*.?, 1) >= 0;
     }
 
     fn createCenteredPageFormat(self: *TextRenderer, weight: u32, size: f32, out: *Handle) bool {
@@ -396,17 +400,14 @@ pub const TextRenderer = struct {
         releaseCom(&self.music_subtitle_format);
         releaseCom(&self.music_title_format);
         releaseCom(&self.status_weather_format);
+        releaseCom(&self.status_clock_time_format);
         releaseCom(&self.pill_line_format);
         releaseCom(&self.status_time_format);
-        releaseCom(&self.status_day_format);
-        releaseCom(&self.status_weekday_format);
         releaseCom(&self.date_format);
         releaseCom(&self.time_format);
         releaseCom(&self.factory);
         self.time_text = @splat(0);
         self.date_text = @splat(0);
-        self.weekday_text = @splat(0);
-        self.day_text = @splat(0);
         self.last_hour = std.math.maxInt(u16);
         self.last_minute = std.math.maxInt(u16);
         self.last_year = 0;
@@ -414,22 +415,22 @@ pub const TextRenderer = struct {
         self.last_day = 0;
     }
 
-    /// Paints the pill and its controls as one themed glass surface.
+    /// Paints one independently floating island surface.
     pub fn drawPillSurface(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, shadow_box_arg: ?Geometry.RoundedBox, opacity_arg: f32) void {
+        _ = shadow_box_arg;
         const context = context_arg orelse return;
         if (opacity_arg <= 0.001 or Geometry.width(box.rect) <= 0 or Geometry.height(box.rect) <= 0) return;
         const theme = Theme.currentTheme();
         var adapter = MaterialAdapter{ .owner = self, .context = context };
         const ops = materialDrawOps(&adapter);
         const shape = materialShape(box);
-        const requested_detail_box = shadow_box_arg orelse box;
-        const detail_box = if (Geometry.width(requested_detail_box.rect) > 0 and Geometry.height(requested_detail_box.rect) > 0) requested_detail_box else box;
-        const detail_shape = materialShape(detail_box);
-        GlassMaterial.drawSoftShadow(ops, detail_shape, theme.shadow, 18);
-        materialGradient(&adapter, shape, materialColor(theme.pill_top), materialColor(theme.pill_bottom), Geometry.height(box.rect), true);
-        strokeRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, asD2D(Theme.themeInk(theme.gloss * 0.2)), 1);
-        GlassMaterial.drawSurfaceLighting(ops, shape, theme, 1);
-        GlassMaterial.drawGrain(ops, shape, theme.grain);
+        GlassMaterial.drawSoftShadow(ops, shape, theme.shadow, 10);
+        fillRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, .{
+            .r = theme.pill_bottom.r,
+            .g = theme.pill_bottom.g,
+            .b = theme.pill_bottom.b,
+            .a = theme.pill_bottom.a * std.math.clamp(opacity_arg, 0, 1),
+        });
     }
 
     /// Paints the common card material used by system, music, tray, Start,
@@ -450,7 +451,7 @@ pub const TextRenderer = struct {
         const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, context, 45);
         const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, context, 46);
         push_clip(context, &shadow_clip, 0);
-        GlassMaterial.drawSoftShadow(ops, shape, theme.shadow, 22);
+        GlassMaterial.drawSoftShadow(ops, shape, theme.shadow, 12);
         pop_clip(context);
         fillRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, .{
             .r = theme.card_fill.r,
@@ -458,9 +459,6 @@ pub const TextRenderer = struct {
             .b = theme.card_fill.b,
             .a = theme.card_fill.a * std.math.clamp(opacity_arg, 0, 1),
         });
-        strokeRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, asD2D(Theme.themeInk(theme.card_edge * opacity_arg)), 1);
-        GlassMaterial.drawSurfaceLighting(ops, shape, theme, opacity_arg);
-        GlassMaterial.drawGrain(ops, shape, theme.grain * opacity_arg);
     }
 
     /// Generic feature-page text primitive; page-specific layout stays with its Feature UI.
@@ -491,11 +489,6 @@ pub const TextRenderer = struct {
     pub fn fillRoundedRect(self: *TextRenderer, context_arg: Handle, bounds: Geometry.RectF, radius_x: f32, radius_y: f32, color: Theme.Color) void {
         _ = self;
         if (context_arg) |context| fillRounded(context, .{ .rect = toD2DRect(bounds), .radius_x = radius_x, .radius_y = radius_y }, asD2D(color));
-    }
-
-    pub fn strokeRoundedRect(self: *TextRenderer, context_arg: Handle, bounds: Geometry.RectF, radius_x: f32, radius_y: f32, color: Theme.Color, thickness: f32) void {
-        _ = self;
-        if (context_arg) |context| strokeRounded(context, .{ .rect = toD2DRect(bounds), .radius_x = radius_x, .radius_y = radius_y }, asD2D(color), thickness);
     }
 
     pub fn drawFeatureLine(self: *TextRenderer, context_arg: Handle, from: [2]f32, to: [2]f32, color: Theme.Color, thickness: f32) void {
@@ -788,7 +781,6 @@ pub const TextRenderer = struct {
                 fillRounded(context.?, rounded, .{ .r = accent.r, .g = accent.g, .b = accent.b, .a = accent.a * 0.97 * opacity });
             } else {
                 fillRounded(context.?, rounded, asD2D(Theme.themeInk(0.055 * opacity)));
-                strokeRounded(context.?, rounded, asD2D(Theme.themeInk(0.13 * opacity)), 1);
             }
 
             const glyph = [_]u16{ indicatorGlyph(@fromBackingInt(@intCast(tile.icon)), tile.icon_value), 0 };
@@ -860,15 +852,6 @@ pub const TextRenderer = struct {
         self.last_png_bitmap_hresult = 0;
         const theme = Theme.currentTheme();
         self.drawCardSurface(context, box, opacity);
-
-        // Reuse the cover as a low-resolution wash behind the controls and text.
-        // The GPU copy is cached by source revision and clipped to the card shape.
-        var card_mask = pushRoundedMask(context, box);
-        defer popRoundedMask(context, &card_mask);
-        if (self.musicPngBitmap(context, &self.music_background_cache, card.background_png, card.background_revision, .background)) |bitmap| {
-            drawMusicBitmap(context, bitmap, layout.art_background, opacity, 1);
-        }
-        fillRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, .{ .r = 0.04, .g = 0.05, .b = 0.08, .a = 0.48 * opacity });
 
         var title: [256]u16 = @splat(0);
         var artist: [256]u16 = @splat(0);
@@ -976,7 +959,7 @@ pub const TextRenderer = struct {
         return true;
     }
 
-    /// Draws the application-window row from the Feature UI's presented
+    /// Draws the application-group row from the Feature UI's presented
     /// geometry. TextRenderer does not calculate taskbar layout.
     pub fn drawTaskIcons(
         self: *TextRenderer,
@@ -989,71 +972,147 @@ pub const TextRenderer = struct {
         const count = buttons.len;
         if (count == 0 or opacity <= 0.01) return true;
 
-        const measured_line_height = self.metrics().secondary_line_height;
-        const line_height = if (measured_line_height > 1) measured_line_height else 16;
         for (buttons[0..count]) |button| {
-            const appear = std.math.clamp(button.appear_amount, 0, 1);
-            if (appear <= 0.01) continue;
             const box = button.bounds;
             if (box.right <= box.left or box.bottom <= box.top) continue;
+            const side = @min(box.right - box.left, box.bottom - box.top);
             const rounded = D2DRoundedRect{
                 .rect = toD2DRect(box),
-                .radius_x = (box.bottom - box.top) * 0.5,
-                .radius_y = (box.bottom - box.top) * 0.5,
+                .radius_x = side * 0.5,
+                .radius_y = side * 0.5,
             };
+            const hover = @max(button.hover_progress, 0);
+            const hover_effect = @min(hover, 1);
 
-            if (button.fill[3] > 0.001) {
-                const fill = D2DColor{
-                    .r = button.fill[0],
-                    .g = button.fill[1],
-                    .b = button.fill[2],
-                    .a = button.fill[3] * appear * opacity,
-                };
-                fillRounded(context, rounded, fill);
-                strokeRounded(context, rounded, fill, 1);
-            }
+            fillRounded(context, rounded, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
             if (button.active) {
-                fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * appear * opacity });
+                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.11 * opacity });
+            }
+            if (hover > 0.01) {
+                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.10 * opacity * hover_effect });
             }
 
             if (button.icon) |icon| {
-                var icon_box = button.icon_bounds;
-                if (appear < 0.999) {
-                    const centre_x = (icon_box.left + icon_box.right) * 0.5;
-                    const centre_y = (icon_box.top + icon_box.bottom) * 0.5;
-                    const scale = 0.70 + 0.30 * appear;
-                    const half_width = (icon_box.right - icon_box.left) * 0.5 * scale;
-                    const half_height = (icon_box.bottom - icon_box.top) * 0.5 * scale;
-                    icon_box = .{
-                        .left = centre_x - half_width,
-                        .top = centre_y - half_height,
-                        .right = centre_x + half_width,
-                        .bottom = centre_y + half_height,
+                drawMusicBitmap(context, icon, button.icon_bounds, opacity, 0);
+            }
+            if (button.window_count > 1) drawWindowStackMark(context, button.icon_bounds, opacity);
+
+            if (button.title) |task_title| {
+                const title_width = button.title_bounds.right - button.title_bounds.left;
+                const title_opacity = std.math.clamp((title_width - 16) / 32, 0, 1) * opacity;
+                if (task_title[0] != 0 and title_opacity > 0.01 and button.title_bounds.right > button.title_bounds.left) {
+                    const color = D2DColor{
+                        .r = 0.94,
+                        .g = 0.95,
+                        .b = 0.98,
+                        .a = title_opacity,
                     };
+                    drawTaskTitle(self, context, std.mem.span(task_title), button.active, color, button.title_bounds, @max(12, self.metrics().secondary_line_height));
                 }
-                drawMusicBitmap(context, icon, icon_box, opacity * appear * (if (button.minimised) @as(f32, 0.55) else 1), 1);
             }
 
-            const title = button.title orelse continue;
-            if (title[0] == 0) continue;
-            const title_box = button.title_bounds;
-            if (title_box.right - title_box.left < 1 or title_box.bottom <= title_box.top) continue;
-            const color =
-                if (button.active)
-                    D2DColor{ .r = 1, .g = 1, .b = 1, .a = 0.98 * opacity * appear }
-                else
-                    D2DColor{ .r = 0.86, .g = 0.88, .b = 0.92, .a = 0.80 * opacity * appear };
-            drawTaskTitle(
-                self,
-                context,
-                std.mem.span(title),
-                button.active,
-                color,
-                title_box,
-                line_height,
-            );
+            if (button.active) {
+                const indicator_width = @max(16, box.right - box.left - 22);
+                const indicator_left = box.left + 11;
+                const indicator = D2DRoundedRect{
+                    .rect = .{ .left = indicator_left, .top = box.bottom + 2, .right = indicator_left + indicator_width, .bottom = box.bottom + 5 },
+                    .radius_x = 1.5,
+                    .radius_y = 1.5,
+                };
+                fillRounded(context, indicator, .{ .r = 0.28, .g = 0.64, .b = 1, .a = 0.98 * opacity });
+            }
         }
         return true;
+    }
+
+    /// Draws the independently floating overflow surface, its retained system
+    /// entries, and the task buttons that do not fit in the top row.
+    pub fn drawTaskOverflow(
+        self: *TextRenderer,
+        context_arg: Handle,
+        box: Geometry.RoundedBox,
+        buttons: []const TaskButton,
+        system_entry: Geometry.RectF,
+        tray_entry: Geometry.RectF,
+        system_hover: f32,
+        tray_hover: f32,
+        opacity_arg: f32,
+    ) bool {
+        const context = context_arg orelse return false;
+        const opacity = std.math.clamp(opacity_arg, 0, 1);
+        if (opacity <= 0.01 or Geometry.width(box.rect) <= 0) return true;
+        self.drawCardSurface(context, box, opacity);
+
+        const title = [_]u16{ 0x66f4, 0x591a, 0x4efb, 0x52a1 };
+        if (self.small_body_format) |format| {
+            drawTextWithColor(context, format, &title, .{ .r = 0.95, .g = 0.96, .b = 0.98, .a = 0.94 * opacity }, .{
+                .left = box.rect.left + 14,
+                .top = box.rect.top + 10,
+                .right = box.rect.left + 120,
+                .bottom = box.rect.top + 31,
+            });
+        }
+
+        self.drawOverflowAction(context, system_entry, true, system_hover, opacity);
+        self.drawOverflowAction(context, tray_entry, false, tray_hover, opacity);
+
+        const line_height = @max(12, self.metrics().secondary_line_height);
+        for (buttons) |button| {
+            const bounds = button.bounds;
+            if (bounds.right <= bounds.left or bounds.bottom <= bounds.top) continue;
+            const tile = D2DRoundedRect{ .rect = toD2DRect(bounds), .radius_x = 12, .radius_y = 12 };
+            fillRounded(context, tile, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = opacity });
+            if (button.active) fillRounded(context, tile, .{ .r = 0.20, .g = 0.38, .b = 0.60, .a = 0.38 * opacity });
+            if (button.icon) |icon| {
+                const icon_box = button.icon_bounds;
+                drawMusicBitmap(context, icon, icon_box, opacity, 1);
+            }
+            if (button.window_count > 1) drawWindowStackMark(context, button.icon_bounds, opacity);
+            if (button.title) |task_title| {
+                if (task_title[0] != 0) {
+                    drawTaskTitle(self, context, std.mem.span(task_title), button.active, .{
+                        .r = 0.89,
+                        .g = 0.90,
+                        .b = 0.93,
+                        .a = 0.9 * opacity,
+                    }, button.title_bounds, line_height);
+                }
+            }
+        }
+        return true;
+    }
+
+    fn drawOverflowAction(self: *TextRenderer, context: *anyopaque, bounds: Geometry.RectF, system: bool, hover: f32, opacity: f32) void {
+        if (bounds.right <= bounds.left or bounds.bottom <= bounds.top) return;
+        const shape = D2DRoundedRect{ .rect = toD2DRect(bounds), .radius_x = 7, .radius_y = 7 };
+        fillRounded(context, shape, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = opacity });
+        if (hover > 0.01) fillRounded(context, shape, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.12 * opacity * std.math.clamp(hover, 0, 1) });
+        const cx = (bounds.left + bounds.right) * 0.5;
+        const cy = bounds.top + 11;
+        const ink = D2DColor{ .r = 0.86, .g = 0.89, .b = 0.94, .a = 0.94 * opacity };
+        if (system) {
+            fillEllipse(context, .{ .point = .{ .x = cx, .y = cy }, .radius_x = 4.1, .radius_y = 4.1 }, ink);
+            fillEllipse(context, .{ .point = .{ .x = cx, .y = cy }, .radius_x = 1.7, .radius_y = 1.7 }, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
+            for (0..4) |index| {
+                const dx: f32 = if (index % 2 == 0) 7 else 0;
+                const dy: f32 = if (index % 2 == 1) 7 else 0;
+                const sign_x: f32 = if (index == 1 or index == 2) -1 else 1;
+                const sign_y: f32 = if (index >= 2) -1 else 1;
+                drawLine(context, .{ .x = cx + dx * sign_x, .y = cy + dy * sign_y }, .{ .x = cx + (dx + 2) * sign_x, .y = cy + (dy + 2) * sign_y }, ink, 2);
+            }
+        } else {
+            for (0..3) |index| {
+                const offset = (@as(f32, @floatFromInt(index)) - 1) * 5;
+                fillEllipse(context, .{ .point = .{ .x = cx + offset, .y = cy }, .radius_x = 1.7, .radius_y = 1.7 }, ink);
+            }
+        }
+        const label: []const u16 = if (system) &.{ 0x8bbe, 0x7f6e } else &.{ 0x6258, 0x76d8 };
+        drawTaskTitle(self, context, label, false, ink, .{
+            .left = bounds.left + 1,
+            .top = bounds.top + 17,
+            .right = bounds.right - 1,
+            .bottom = bounds.bottom - 1,
+        }, 13);
     }
 
     fn musicPngBitmap(self: *TextRenderer, context: *anyopaque, cache: *BitmapCache, png: []const u8, revision: u64, slot: WicImage.DecodeSlot) ?*anyopaque {
@@ -1218,23 +1277,29 @@ pub const TextRenderer = struct {
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         if (opacity <= 0.01) return true;
         self.refresh();
-        if (self.status_weekday_format == null or self.status_day_format == null or
-            self.status_time_format == null or self.status_weather_format == null) return false;
+        if (self.status_clock_time_format == null or self.status_weather_format == null) return false;
 
-        const run = buildStatusRun(self, zSlice(&self.weekday_text), zSlice(&self.day_text), zSlice(&self.time_text), weather);
+        const run = buildStatusRun(self, zSlice(&self.time_text), &weather);
         const pieces = run.pieces;
         const count = run.count;
         if (count == 0) return true;
         const rect = box.rect;
         var x = rect.left + ((rect.right - rect.left) - run.width) * 0.5;
         if (x < rect.left + 8) x = rect.left + 8;
-        // DirectWrite's CJK fallback metrics make the visible glyphs sit low in
-        // the 36-DIP pill even with paragraph centering. Apply the optical
-        // baseline correction to text and weather marks together.
-        const vertical_adjustment: f32 = -12;
-        const mark_center_y = (rect.top + rect.bottom) * 0.5 - 1;
+        // DirectWrite status formats and the weather mark share one vertical
+        // center, leaving the row ready for additional items later.
+        const mark_center_y = (rect.top + rect.bottom) * 0.5;
+        const content_clip = D2DRectF{ .left = rect.left + 8, .top = rect.top, .right = rect.right - 8, .bottom = rect.bottom };
+        if (content_clip.right <= content_clip.left) return true;
+        const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, context.?, 45);
+        const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, context.?, 46);
+        push_clip(context.?, &content_clip, 0);
+        defer pop_clip(context.?);
         for (pieces[0..count]) |piece| {
-            if (piece.mark != .none) {
+            if (piece.divider) {
+                const color = D2DColor{ .r = 0.43, .g = 0.48, .b = 0.56, .a = 0.86 * opacity };
+                drawLine(context.?, .{ .x = x + 0.5, .y = mark_center_y - 12 }, .{ .x = x + 0.5, .y = mark_center_y + 12 }, color, 1.2);
+            } else if (piece.mark != .none) {
                 drawStatusMark(context.?, .{ .left = x, .top = mark_center_y - piece.width * 0.5, .right = x + piece.width, .bottom = mark_center_y + piece.width * 0.5 }, piece.mark, opacity);
             } else if (piece.text.len != 0 and piece.format != null) {
                 const color = D2DColor{ .r = piece.luminance, .g = piece.luminance, .b = piece.luminance, .a = opacity };
@@ -1242,7 +1307,7 @@ pub const TextRenderer = struct {
                 const create_brush = comMethod(*const fn (*anyopaque, *const D2DColor, Handle, *Handle) callconv(.winapi) HResult, context.?, 8);
                 if (create_brush(context.?, &color, null, &brush) >= 0 and brush != null) {
                     defer releaseCom(&brush);
-                    drawText(context.?, piece.format.?, piece.text, brush.?, .{ .left = x, .top = rect.top + vertical_adjustment, .right = x + piece.width, .bottom = rect.bottom + vertical_adjustment });
+                    drawText(context.?, piece.format.?, piece.text, brush.?, .{ .left = x, .top = rect.top, .right = x + piece.width, .bottom = rect.bottom });
                 }
             }
             x += piece.width + piece.after;
@@ -1258,76 +1323,51 @@ pub const TextRenderer = struct {
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
-        if (wash > 0.01) {
-            const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = (box.bottom - box.top) * 0.5, .radius_y = (box.bottom - box.top) * 0.5 };
-            fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * opacity * wash });
-        }
+        const button = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = BarControlLayout.start_button_dip * 0.5, .radius_y = BarControlLayout.start_button_dip * 0.5 };
+        fillRounded(context, button, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
+        if (wash > 0.01) fillRounded(context, button, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.13 * opacity * wash });
         const side = BarControlLayout.start_icon_dip;
         const centre_x = (box.left + box.right) * 0.5;
         const centre_y = (box.top + box.bottom) * 0.5;
         const left = centre_x - side * 0.5;
         const top = centre_y - side * 0.5;
-        const pane = (side - 3.0) * 0.5;
+        const pane = (side - 2.5) * 0.5;
         const ink = D2DColor{ .r = 0.92, .g = 0.94, .b = 0.98, .a = 0.95 * opacity };
         for ([4]D2DRectF{
             .{ .left = left, .top = top, .right = left + pane, .bottom = top + pane },
-            .{ .left = left + pane + 3.0, .top = top, .right = left + side, .bottom = top + pane },
-            .{ .left = left, .top = top + pane + 3.0, .right = left + pane, .bottom = top + side },
-            .{ .left = left + pane + 3.0, .top = top + pane + 3.0, .right = left + side, .bottom = top + side },
+            .{ .left = left + pane + 2.5, .top = top, .right = left + side, .bottom = top + pane },
+            .{ .left = left, .top = top + pane + 2.5, .right = left + pane, .bottom = top + side },
+            .{ .left = left + pane + 2.5, .top = top + pane + 2.5, .right = left + side, .bottom = top + side },
         }) |rect| {
-            fillRounded(context, .{ .rect = rect, .radius_x = 0, .radius_y = 0 }, ink);
+            fillRounded(context, .{ .rect = rect, .radius_x = 1.5, .radius_y = 1.5 }, ink);
         }
     }
 
-    /// Draws the system-panel chevron. Its direction indicates whether a press
-    /// will open or close the panel.
-    pub fn drawSystemButton(_: *TextRenderer, context_arg: Handle, island: Geometry.RoundedBox, wash_arg: f32, open: bool, opacity_arg: f32) void {
+    /// Draws the standalone overflow chevron at the end of the compact dock.
+    pub fn drawOverflowButton(_: *TextRenderer, context_arg: Handle, box: Geometry.RectF, wash_arg: f32, open: bool, opacity_arg: f32) void {
         const context = context_arg orelse return;
-        const box = BarControlLayout.systemButtonFor(island);
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
-        if (wash > 0.01) {
-            const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = (box.bottom - box.top) * 0.5, .radius_y = (box.bottom - box.top) * 0.5 };
-            fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * opacity * wash });
-        }
+        const diameter = @min(box.right - box.left, box.bottom - box.top);
+        const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = diameter * 0.5, .radius_y = diameter * 0.5 };
+        fillRounded(context, rounded, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
+        if (wash > 0.01) fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.15 * opacity * wash });
+        const ink = D2DColor{ .r = 0.96, .g = 0.97, .b = 0.99, .a = 0.96 * opacity };
         const cx = (box.left + box.right) * 0.5;
         const cy = (box.top + box.bottom) * 0.5;
-        const half_width: f32 = 4.6;
-        const half_height: f32 = 2.8;
+        const half_width: f32 = 4;
+        const half_height: f32 = 2.4;
         const tip_y = if (open) cy - half_height else cy + half_height;
         const wing_y = if (open) cy + half_height else cy - half_height;
-        const ink = D2DColor{ .r = 0.94, .g = 0.95, .b = 0.98, .a = 0.92 * opacity };
-        drawLine(context, .{ .x = cx - half_width, .y = wing_y }, .{ .x = cx, .y = tip_y }, ink, 1.8);
-        drawLine(context, .{ .x = cx, .y = tip_y }, .{ .x = cx + half_width, .y = wing_y }, ink, 1.8);
-    }
-
-    /// Draws the three-dot tray control at the end of the application row.
-    pub fn drawTrayButton(_: *TextRenderer, context_arg: Handle, island: Geometry.RoundedBox, wash_arg: f32, open: bool, opacity_arg: f32) void {
-        const context = context_arg orelse return;
-        const box = BarControlLayout.trayButtonFor(island);
-        if (box.right <= box.left or opacity_arg <= 0.01) return;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
-        if (wash > 0.01) {
-            const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = (box.bottom - box.top) * 0.5, .radius_y = (box.bottom - box.top) * 0.5 };
-            fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = (if (open) @as(f32, 0.22) else 0.16 * wash) * opacity });
-        }
-        const brightness: f32 = if (open) 1 else 0.90;
-        const ink = D2DColor{ .r = brightness, .g = brightness, .b = brightness, .a = 0.94 * opacity };
-        const cx = (box.left + box.right) * 0.5;
-        const cy = (box.top + box.bottom) * 0.5;
-        for (0..3) |index| {
-            const offset = (@as(f32, @floatFromInt(index)) - 1) * 7.5;
-            fillEllipse(context, .{ .point = .{ .x = cx + offset, .y = cy }, .radius_x = 2.6, .radius_y = 2.6 }, ink);
-        }
+        drawLine(context, .{ .x = cx - half_width, .y = wing_y }, .{ .x = cx, .y = tip_y }, ink, 1.6);
+        drawLine(context, .{ .x = cx, .y = tip_y }, .{ .x = cx + half_width, .y = wing_y }, ink, 1.6);
     }
 
     /// Measures the exact run used by drawStatusLine, for parity checks and width constraints.
-    pub fn measureStatusLine(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, weather: StatusLineWeather.View) f32 {
-        if (self.factory == null or self.status_weekday_format == null or self.status_day_format == null or
-            self.status_time_format == null or self.status_weather_format == null) return 0;
-        return buildStatusRun(self, weekday, day, time, weather).width;
+    pub fn measureStatusLine(self: *TextRenderer, time: []const u16, weather: StatusLineWeather.View) f32 {
+        if (self.factory == null or self.status_clock_time_format == null or self.status_weather_format == null) return 0;
+        return buildStatusRun(self, time, &weather).width;
     }
 
     pub fn metrics(self: *TextRenderer) TextMetrics {
@@ -1364,23 +1404,19 @@ pub const TextRenderer = struct {
             .{ 0x5468, 0x516d },
         };
         const weekday = weekdays[if (now.day_of_week < 7) now.day_of_week else 0];
-        self.weekday_text = @splat(0);
-        self.weekday_text[0] = weekday[0];
-        self.weekday_text[1] = weekday[1];
-        self.day_text = @splat(0);
-        var cursor: usize = 3;
-        cursor = 0;
-        appendNumber24(&self.day_text, &cursor, now.month);
-        self.day_text[cursor] = 0x6708;
+        var day_text: [24]u16 = @splat(0);
+        var cursor: usize = 0;
+        appendNumber24(&day_text, &cursor, now.month);
+        day_text[cursor] = 0x6708;
         cursor += 1;
-        appendNumber24(&self.day_text, &cursor, now.day);
-        self.day_text[cursor] = 0x65e5;
+        appendNumber24(&day_text, &cursor, now.day);
+        day_text[cursor] = 0x65e5;
         self.date_text = @splat(0);
         self.date_text[0] = weekday[0];
         self.date_text[1] = weekday[1];
         self.date_text[2] = 0x3001;
         cursor = 3;
-        for (self.day_text) |unit| {
+        for (day_text) |unit| {
             if (unit == 0) break;
             self.date_text[cursor] = unit;
             cursor += 1;
@@ -1458,34 +1494,41 @@ const StatusPiece = struct {
     text: []const u16 = &.{},
     format: Handle = null,
     mark: StatusLineWeather.Mark = .none,
+    divider: bool = false,
     width: f32 = 0,
     after: f32 = 0,
     luminance: f32 = 0,
 };
 
 const StatusRun = struct {
-    pieces: [6]StatusPiece = @splat(.{}),
+    pieces: [max_status_pieces]StatusPiece = @splat(.{}),
     count: usize = 0,
     width: f32 = 0,
 };
 
-fn buildStatusRun(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, weather: StatusLineWeather.View) StatusRun {
+const max_status_pieces = 12;
+
+fn buildStatusRun(self: *TextRenderer, time: []const u16, weather: *const StatusLineWeather.View) StatusRun {
     var run = StatusRun{};
-    pushStatusText(&run.pieces, &run.count, self, weekday, self.status_weekday_format, 4, 0.88);
-    pushStatusText(&run.pieces, &run.count, self, day, self.status_day_format, 10, 0.72);
-    pushStatusText(&run.pieces, &run.count, self, time, self.status_time_format, 10, 0.99);
-    const mark = weather.mark;
-    if (mark != .none and run.count < run.pieces.len) {
-        run.pieces[run.count] = .{ .mark = mark, .width = 16, .after = 4 };
+    pushStatusText(&run.pieces, &run.count, self, time, self.status_clock_time_format, 14, 0.99);
+    if (run.count < run.pieces.len) {
+        run.pieces[run.count] = .{ .divider = true, .width = 1, .after = 14 };
         run.count += 1;
     }
+    const mark = weather.mark;
+    if (mark != .none and run.count < run.pieces.len) {
+        run.pieces[run.count] = .{ .mark = mark, .width = 20, .after = 6 };
+        run.count += 1;
+    }
+    // The run stores slices into weather. Keep the caller-owned view alive for
+    // the duration of drawing instead of pointing into a by-value helper copy.
     pushStatusText(&run.pieces, &run.count, self, zSlice(&weather.sky), self.status_weather_format, 4, 0.92);
     pushStatusText(&run.pieces, &run.count, self, zSlice(&weather.temperature), self.status_weather_format, 0, 0.80);
     for (run.pieces[0..run.count]) |piece| run.width += piece.width + piece.after;
     return run;
 }
 
-fn pushStatusText(pieces: *[6]StatusPiece, count: *usize, self: *TextRenderer, text: []const u16, format: Handle, after: f32, luminance: f32) void {
+fn pushStatusText(pieces: *[max_status_pieces]StatusPiece, count: *usize, self: *TextRenderer, text: []const u16, format: Handle, after: f32, luminance: f32) void {
     if (text.len == 0 or format == null or count.* >= pieces.len) return;
     const width = measureTextWidth(self.factory.?, format.?, text);
     if (width <= 0) return;
@@ -1706,6 +1749,34 @@ fn fillRounded(context: *anyopaque, rounded: D2DRoundedRect, color: D2DColor) vo
     }.call, &rounded);
 }
 
+fn drawWindowStackMark(context: *anyopaque, icon: Geometry.RectF, opacity: f32) void {
+    const icon_side = @min(icon.right - icon.left, icon.bottom - icon.top);
+    if (icon_side <= 0) return;
+    const side = @min(8.5, @max(6.5, icon_side * 0.30));
+    const offset = side * 0.27;
+    const left = icon.right - side - 0.4;
+    const top = icon.bottom - side - 0.4;
+    const back = D2DRoundedRect{
+        .rect = .{ .left = left - offset * 2, .top = top - offset * 2, .right = left + side - offset * 2, .bottom = top + side - offset * 2 },
+        .radius_x = 1.5,
+        .radius_y = 1.5,
+    };
+    const middle = D2DRoundedRect{
+        .rect = .{ .left = left - offset, .top = top - offset, .right = left + side - offset, .bottom = top + side - offset },
+        .radius_x = 1.5,
+        .radius_y = 1.5,
+    };
+    const front = D2DRoundedRect{ .rect = .{ .left = left, .top = top, .right = left + side, .bottom = top + side }, .radius_x = 1.5, .radius_y = 1.5 };
+    fillRounded(context, back, .{ .r = 0.92, .g = 0.95, .b = 1, .a = opacity });
+    fillRounded(context, middle, .{ .r = 0.07, .g = 0.09, .b = 0.13, .a = opacity });
+    fillRounded(context, front, .{ .r = 0.24, .g = 0.57, .b = 0.97, .a = opacity });
+    fillRounded(context, .{
+        .rect = .{ .left = left + side * 0.25, .top = top + side * 0.43, .right = left + side * 0.75, .bottom = top + side * 0.58 },
+        .radius_x = 0.5,
+        .radius_y = 0.5,
+    }, .{ .r = 1, .g = 1, .b = 1, .a = 0.96 * opacity });
+}
+
 fn canvasFillRoundedRect(raw: ?*anyopaque, rounded: *const CanvasModule.RoundedRect, color: *const Theme.Color) callconv(.c) void {
     const context = raw orelse return;
     fillRounded(context, .{
@@ -1755,16 +1826,6 @@ fn popRoundedMask(context: *anyopaque, geometry: *Handle) void {
     releaseCom(geometry);
 }
 
-fn strokeRounded(context: *anyopaque, rounded: D2DRoundedRect, color: D2DColor, width: f32) void {
-    // ID2D1RenderTarget::DrawRoundedRectangle is slot 18; slot 20 is DrawEllipse.
-    const draw = comMethod(*const fn (*anyopaque, *const D2DRoundedRect, *anyopaque, f32, Handle) callconv(.winapi) void, context, 18);
-    var brush: Handle = null;
-    const create_brush = comMethod(*const fn (*anyopaque, *const D2DColor, Handle, *Handle) callconv(.winapi) HResult, context, 8);
-    if (create_brush(context, &color, null, &brush) < 0 or brush == null) return;
-    defer releaseCom(&brush);
-    draw(context, &rounded, brush.?, width, null);
-}
-
 fn asD2D(color: Theme.Color) D2DColor {
     return .{ .r = color.r, .g = color.g, .b = color.b, .a = color.a };
 }
@@ -1787,7 +1848,7 @@ fn drawTextWithColorClipped(context: *anyopaque, format: *anyopaque, text: []con
     if (create_brush(context, &color, null, &brush) < 0 or brush == null) return;
     defer releaseCom(&brush);
     const draw = comMethod(*const fn (*anyopaque, [*]const u16, u32, *anyopaque, *const D2DRectF, *anyopaque, u32, i32) callconv(.winapi) void, context, 27);
-    draw(context, text.ptr, @intCast(text.len), format, &rect, brush.?, 0, 2);
+    draw(context, text.ptr, @intCast(text.len), format, &rect, brush.?, 1, 2);
 }
 
 fn drawLine(context: *anyopaque, from: D2DPointF, to: D2DPointF, color: D2DColor, width: f32) void {

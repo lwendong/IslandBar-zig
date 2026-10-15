@@ -3,9 +3,9 @@ const Contract = @import("ThumbnailContract");
 pub const max_width_dip: f32 = 260;
 pub const max_height_dip: f32 = 160;
 pub const gap_dip: f32 = 10;
-pub const pad_dip: f32 = 8;
-pub const title_dip: f32 = 22;
-pub const radius_dip: f32 = 12;
+pub const pad_dip: f32 = 10;
+pub const title_dip: f32 = 28;
+pub const radius_dip: f32 = 18;
 
 pub const Rect = Contract.Rect;
 pub const Placement = Contract.Placement;
@@ -54,6 +54,12 @@ pub fn thumbnailBoxFor(source_width_px: i32, source_height_px: i32, icon_box_px:
         .right = @intFromFloat(left + card_width),
         .bottom = @intFromFloat(top + card_height),
     };
+    placement.header = .{
+        .left = placement.card.left,
+        .top = placement.card.top,
+        .right = placement.card.right,
+        .bottom = placement.card.top + roundPixel(pad + title),
+    };
     const slot_left = @as(f32, @floatFromInt(placement.card.left)) + pad;
     const slot_top = @as(f32, @floatFromInt(placement.card.top)) + pad + title;
     placement.picture.left = roundPixel(slot_left + (slot_width - width) * 0.5);
@@ -69,7 +75,7 @@ pub fn smokeCheck() bool {
     const monitor = Rect{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
     const preview = thumbnailBoxFor(1920, 1080, icon, monitor, 1);
     if (!preview.valid) return false;
-    if (preview.card.right - preview.card.left != 276 or preview.card.bottom - preview.card.top != 198) return false;
+    if (preview.card.right - preview.card.left != 280 or preview.card.bottom - preview.card.top != 208) return false;
     const image_width = preview.picture.right - preview.picture.left;
     const image_height = preview.picture.bottom - preview.picture.top;
     if (@abs(@as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height)) - 16.0 / 9.0) > 0.02) return false;

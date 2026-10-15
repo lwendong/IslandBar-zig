@@ -1,10 +1,10 @@
 pub const dip_per_inch: f32 = 96.0;
 
-pub const window_height_dip: f32 = 360.0;
-pub const pill_width_dip: f32 = 220.0;
-pub const pill_height_dip: f32 = 36.0;
-pub const corner_radius_dip: f32 = 18.0;
-pub const pill_top_margin_dip: f32 = 6.0;
+pub const window_height_dip: f32 = 520.0;
+pub const pill_width_dip: f32 = 300.0;
+pub const pill_height_dip: f32 = 48.0;
+pub const corner_radius_dip: f32 = 24.0;
+pub const pill_top_margin_dip: f32 = 8.0;
 pub const reserved_bar_height_dip: f32 = pill_top_margin_dip + pill_height_dip;
 pub const hit_tolerance_dip: f32 = 2.0;
 

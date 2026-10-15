@@ -42,6 +42,7 @@ const WinRect = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
 const NativePaintStruct = extern struct { hdc: HDC, erase: i32, paint: WinRect, restore: i32, update: i32, reserved: [32]u8 };
 extern "kernel32" fn GetModuleHandleW(module_name: ?[*:0]const u16) callconv(.winapi) HINSTANCE;
 extern "kernel32" fn GetLastError() callconv(.winapi) u32;
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "dwmapi" fn DwmSetWindowAttribute(window: HWND, attribute: u32, value: *const anyopaque, size: u32) callconv(.winapi) i32;
 extern "user32" fn RegisterClassW(window_class: *const WindowClass) callconv(.winapi) u16;
 extern "user32" fn CreateWindowExW(extended_style: u32, class_name: [*:0]const u16, window_name: [*:0]const u16, style: u32, x: i32, y: i32, width: i32, height: i32, parent: HWND, menu: HMENU, instance: HINSTANCE, parameter: ?*anyopaque) callconv(.winapi) HWND;
@@ -97,6 +98,7 @@ const wm_timer: u32 = 0x0113;
 const wm_mouseactivate: u32 = 0x0021;
 const wm_setcursor: u32 = 0x0020;
 const wm_nchittest: u32 = 0x0084;
+const wm_mousemove: u32 = 0x0200;
 const ht_client: isize = 1;
 const ht_transparent: isize = -1;
 const cursor_arrow: ?*anyopaque = @ptrFromInt(32512);
@@ -115,6 +117,7 @@ const ma_noactivate: isize = 3;
 const pointer_timer_id: usize = 1;
 const shell_timer_id: usize = 2;
 const pointer_poll_ms: u32 = 8;
+const mousemove_callback_min_interval_ms: u64 = 8;
 const shell_poll_ms: u32 = 1000;
 const wheel_delta: i32 = 120;
 const error_class_already_exists: u32 = 1410;
@@ -163,6 +166,7 @@ pub const NativeWindow = struct {
     pointer_timer: usize = 0,
     pointer_interval_ms: u32 = pointer_poll_ms,
     shell_timer: usize = 0,
+    last_mousemove_callback_ms: u64 = 0,
     pointer_inside: bool = false,
     pointer_inside_changed: bool = false,
     last_pointer: Point = .{ .x = 0, .y = 0 },
@@ -472,10 +476,22 @@ fn nativeWindowProc(window: HWND, message: u32, wparam: usize, lparam: isize) ca
             }
             return ht_transparent;
         },
+        wm_mousemove => {
+            if (updatePointer(self)) {
+                const now = GetTickCount64();
+                const callback_due = self.last_mousemove_callback_ms == 0 or
+                    now -| self.last_mousemove_callback_ms >= mousemove_callback_min_interval_ms;
+                if (callback_due) {
+                    self.last_mousemove_callback_ms = now;
+                    if (self.pointer_callback) |callback| callback(self.callback_context);
+                }
+            }
+            return 0;
+        },
         wm_erasebkgnd => return 1,
         wm_timer => {
             if (wparam == pointer_timer_id) {
-                updatePointer(self);
+                _ = updatePointer(self);
                 if (self.pointer_callback) |callback| callback(self.callback_context);
             } else if (wparam == shell_timer_id) {
                 if (self.timer_callback) |callback| callback(self.callback_context);
@@ -548,10 +564,10 @@ fn signedHighWord(value: isize) i32 {
     return @as(i16, @bitCast(@as(u16, @truncate(bits >> 16))));
 }
 
-fn updatePointer(self: *NativeWindow) void {
+fn updatePointer(self: *NativeWindow) bool {
     var point: Point = undefined;
-    if (GetCursorPos(&point) == 0) return;
-    if (self.have_pointer and point.x == self.last_pointer.x and point.y == self.last_pointer.y) return;
+    if (GetCursorPos(&point) == 0) return false;
+    if (self.have_pointer and point.x == self.last_pointer.x and point.y == self.last_pointer.y) return false;
     self.have_pointer = true;
     self.last_pointer = point;
     const inside = point.x >= self.x and point.x < self.x + self.width and point.y >= self.y and point.y < self.y + self.height;
@@ -560,6 +576,7 @@ fn updatePointer(self: *NativeWindow) void {
         self.pointer_inside_changed = true;
         if (self.hwnd) |hwnd| _ = InvalidateRect(hwnd, null, 0);
     }
+    return true;
 }
 
 pub const Rect = struct { left: i32 = 0, top: i32 = 0, right: i32 = 0, bottom: i32 = 0 };

@@ -13,8 +13,8 @@ pub const Frame = struct {
     card_up: bool = false,
     card_left_dip: f32 = 0,
     task_row_bounds: Geometry.RectF = .{},
-    status_strip_width_dip: f32 = 0,
-    tray_icon_count: i32 = 0,
+    overflow_button_bounds: Geometry.RectF = .{},
+    overflow_bounds: Geometry.RectF = .{},
 };
 
 /// Returns the pixel bounds needed to admit the shapes painted in one frame.
@@ -36,13 +36,10 @@ pub fn forFrame(frame: Frame) Region {
         right = @max(right, frame.card_left_dip + Motion.expanded_width_dip);
     }
 
-    const tray_visible = frame.tray_icon_count > 0;
-    const cluster = BarControlLayout.barClusterFor(target_island, tray_visible);
-    left = @min(left, cluster.rect.left);
-
-    if (frame.status_strip_width_dip > 0) {
-        left = @min(left, BarControlLayout.statusStripFor(target_island).rect.left);
-    }
+    const start_button = BarControlLayout.startButtonFor(target_island);
+    const overflow_button = frame.overflow_button_bounds;
+    left = @min(left, start_button.left);
+    if (overflow_button.right > overflow_button.left) right = @max(right, overflow_button.right);
     left = @max(0, left);
 
     const has_task_row = frame.task_row_bounds.right > frame.task_row_bounds.left and
@@ -51,9 +48,15 @@ pub fn forFrame(frame: Frame) Region {
         left = @min(left, frame.task_row_bounds.left);
         right = @max(right, frame.task_row_bounds.right);
     }
+    const has_overflow = frame.overflow_bounds.right > frame.overflow_bounds.left and frame.overflow_bounds.bottom > frame.overflow_bounds.top;
+    if (has_overflow) {
+        left = @min(left, frame.overflow_bounds.left);
+        right = @max(right, frame.overflow_bounds.right);
+    }
 
     var bottom = if (frame.card_up) card_bottom else shape.rect.bottom;
     if (has_task_row) bottom = @max(bottom, frame.task_row_bounds.bottom);
+    if (has_overflow) bottom = @max(bottom, frame.overflow_bounds.bottom);
     bottom += 2;
 
     var region = Region{
@@ -77,6 +80,7 @@ pub fn smokeCheck() bool {
         .anchor = anchor,
         .current = resting,
         .task_row_bounds = .{ .left = 1078, .top = 9, .right = 1180, .bottom = 39 },
+        .overflow_button_bounds = BarControlLayout.buttonAt(1180 + BarControlLayout.dock_gap_dip, resting),
     });
     if (rest_region.left < 0 or rest_region.top != 0 or rest_region.right <= rest_region.left or
         rest_region.right >= 1920 or rest_region.left > Geometry.dipToPixels(resting.rect.left, 96) or
@@ -92,12 +96,12 @@ pub fn smokeCheck() bool {
         .card_up = true,
         .card_left_dip = 500,
         .task_row_bounds = .{ .left = 1078, .top = 9, .right = 1180, .bottom = 39 },
-        .status_strip_width_dip = BarControlLayout.status_strip_width_dip,
-        .tray_icon_count = 1,
+        .overflow_button_bounds = BarControlLayout.buttonAt(1180 + BarControlLayout.dock_gap_dip, resting),
+        .overflow_bounds = .{ .left = 1150, .top = 60, .right = 1240, .bottom = 240 },
     });
     const expected_bottom = Geometry.dipToPixels(resting.rect.bottom + Motion.card_top_gap_dip + Motion.expanded_height_dip + 2, 144);
     if (card_region.left > Geometry.dipToPixels(500, 144) or
-        card_region.right < Geometry.dipToPixels(1020, 144) or
+        card_region.right < Geometry.dipToPixels(1240, 144) or
         card_region.bottom != expected_bottom) return false;
 
     const closing_region = forFrame(.{
@@ -109,7 +113,8 @@ pub fn smokeCheck() bool {
         .card_up = true,
         .card_left_dip = 1130,
         .task_row_bounds = .{ .left = 1150, .top = 9, .right = 1650, .bottom = 39 },
-        .tray_icon_count = 1,
+        .overflow_button_bounds = BarControlLayout.buttonAt(1650 + BarControlLayout.dock_gap_dip, resting),
+        .overflow_bounds = .{},
     });
     if (closing_region.right < Geometry.dipToPixels(1650, 144) or closing_region.bottom != expected_bottom) return false;
 
@@ -121,31 +126,12 @@ pub fn smokeCheck() bool {
         .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
         .current = wide_rest,
         .task_row_bounds = .{ .left = 1398, .top = 9, .right = 2180, .bottom = 39 },
-        .tray_icon_count = BarControlLayout.max_tray_icons,
+        .overflow_button_bounds = BarControlLayout.buttonAt(2180 + BarControlLayout.dock_gap_dip, wide_rest),
     });
-    const tray_button = BarControlLayout.trayButtonFor(wide_rest);
-    const cluster = BarControlLayout.barClusterFor(wide_rest, true);
-    if (tray_region.left > @as(i32, @intFromFloat(cluster.rect.left)) or
-        tray_region.right < @as(i32, @intFromFloat(@max(tray_button.right, 2180)))) return false;
-
-    const with_status = forFrame(.{
-        .monitor_width_dip = 2560,
-        .dpi = 96,
-        .state = .collapsed,
-        .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
-        .current = wide_rest,
-        .task_row_bounds = .{ .left = 1398, .top = 9, .right = 1700, .bottom = 39 },
-        .status_strip_width_dip = BarControlLayout.status_strip_width_dip,
-    });
-    const without_status = forFrame(.{
-        .monitor_width_dip = 2560,
-        .dpi = 96,
-        .state = .collapsed,
-        .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
-        .current = wide_rest,
-        .task_row_bounds = .{ .left = 1398, .top = 9, .right = 1700, .bottom = 39 },
-    });
-    if (with_status.left >= without_status.left or with_status.bottom != without_status.bottom) return false;
+    const overflow_button = BarControlLayout.buttonAt(2180 + BarControlLayout.dock_gap_dip, wide_rest);
+    const start_button = BarControlLayout.startButtonFor(wide_rest);
+    if (tray_region.left > @as(i32, @intFromFloat(start_button.left)) or
+        tray_region.right < @as(i32, @intFromFloat(@max(overflow_button.right, 2180)))) return false;
 
     const full_anchor = Motion.anchorForWindow(0, 0, 2560, 32);
     const full_bar = Motion.boxForState(.full_bar, full_anchor);

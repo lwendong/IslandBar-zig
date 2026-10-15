@@ -187,7 +187,7 @@ pub fn layoutFor(box: Geometry.RoundedBox) CardLayout {
     layout.progress = .{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = layout.controls.top - 10 - progress_bar_dip, .bottom = layout.controls.top - 10 };
     layout.elapsed = .{ .left = layout.progress.left, .right = layout.progress.left + 56, .top = layout.progress.top - 4 - time_row_dip, .bottom = layout.progress.top - 4 };
     layout.remaining = .{ .left = layout.progress.right - 56, .right = layout.progress.right, .top = layout.elapsed.top, .bottom = layout.elapsed.bottom };
-    layout.app_row = .{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = box.rect.top + pad, .bottom = box.rect.top + pad + app_row_height_dip };
+    layout.app_row = .{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = box.rect.top + 56, .bottom = box.rect.top + 56 + app_row_height_dip };
     const row_centre_y = (layout.app_row.top + layout.app_row.bottom) * 0.5;
     layout.app_icon_size = app_icon_size_dip;
     layout.app_icon = .{ .left = layout.app_row.left, .right = layout.app_row.left + layout.app_icon_size, .top = row_centre_y - layout.app_icon_size * 0.5, .bottom = row_centre_y + layout.app_icon_size * 0.5 };
@@ -268,6 +268,7 @@ test "music UI preserves compact and expanded card geometry" {
     try std.testing.expectEqual(@as(f32, 26), compact.play_pause.right - compact.play_pause.left);
     const card = layoutFor(box);
     try std.testing.expectEqual(@as(f32, 96), card.artwork.right - card.artwork.left);
+    try std.testing.expectEqual(@as(f32, 56), card.app_row.top - box.rect.top);
     try std.testing.expectEqual(@as(f32, 38), card.play_pause.right - card.play_pause.left);
     try std.testing.expectEqual(CardControl.play_pause, cardControlAt(card, card.play_pause.left + 1, card.play_pause.top + 1));
 }

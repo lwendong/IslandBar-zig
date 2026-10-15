@@ -200,7 +200,6 @@ pub fn paint(context_arg: ?*anyopaque, backend: *TextRenderer.TextRenderer, draw
     for (text.view.layout.cells[0..@intCast(text.view.layout.count)], 0..) |cell, index| {
         const rounded = Theme.Color{ .r = 0, .g = 0, .b = 0, .a = 0.28 * opacity };
         backend.fillRoundedRect(d2d, cell, 10, 10, rounded);
-        backend.strokeRoundedRect(d2d, cell, 10, 10, Theme.themeInk(0.13 * opacity), 1);
         if (text.hovered_icon == @as(i32, @intCast(index))) backend.fillRoundedRect(d2d, cell, 10, 10, Theme.themeInk(0.16 * opacity));
         if (index >= text.icons.len) continue;
         const icon = text.icons[index];
@@ -213,7 +212,6 @@ pub fn paint(context_arg: ?*anyopaque, backend: *TextRenderer.TextRenderer, draw
     if (text.view.menu.count > 0) {
         const menu = text.view.menu;
         backend.fillRoundedRect(d2d, menu.box, 10, 10, .{ .r = 0.13, .g = 0.13, .b = 0.16, .a = 0.99 * opacity });
-        backend.strokeRoundedRect(d2d, menu.box, 10, 10, .{ .r = 1, .g = 1, .b = 1, .a = 0.12 * opacity }, 1);
         for (menu.rows[0..@intCast(menu.count)], 0..) |row, index| {
             if (text.hovered_menu_row == @as(i32, @intCast(index))) backend.fillRoundedRect(d2d, row, 6, 6, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * opacity });
             if (index < text.menu_actions.len) _ = backend.drawLabel(d2d, .page_body, menuLabel(text.menu_actions[index], text.quit_armed and text.menu_actions[index] == .quit_application), .{ .left = row.left + 8, .top = row.top, .right = row.right - 8, .bottom = row.bottom }, .{ .r = 0.90, .g = 0.91, .b = 0.95, .a = 0.94 * opacity });
