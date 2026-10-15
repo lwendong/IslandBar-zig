@@ -70,6 +70,7 @@ const ThumbnailProperties = extern struct {
 pub const ThumbnailPlacement = ThumbnailContract.Placement;
 
 extern "kernel32" fn GetModuleHandleW(module_name: ?[*:0]const u16) callconv(.winapi) HINSTANCE;
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "kernel32" fn GetLastError() callconv(.winapi) DWORD;
 extern "user32" fn RegisterClassExW(window_class: *const WindowClassExW) callconv(.winapi) u16;
 extern "user32" fn CreateWindowExW(ex_style: DWORD, class_name: [*:0]const u16, window_name: [*:0]const u16, style: DWORD, x: i32, y: i32, width: i32, height: i32, parent: HWND, menu: HANDLE, instance: HINSTANCE, parameter: ?*anyopaque) callconv(.winapi) HWND;
@@ -140,6 +141,7 @@ const clip_default_precision: DWORD = 0;
 const cleartype_quality: DWORD = 5;
 const default_pitch: DWORD = 0;
 const di_normal: UINT = 0x0003;
+const title_refresh_interval_ms: u64 = 120;
 
 const thumbnail_class_name: [*:0]const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', 'B', 'a', 'r', 'T', 'h', 'u', 'm', 'b', 'n', 'a', 'i', 'l', 0 };
 const window_name: [*:0]const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', 'B', 'a', 'r', ' ', 'p', 'r', 'e', 'v', 'i', 'e', 'w', 0 };
@@ -180,6 +182,8 @@ pub const ThumbnailAdapter = struct {
     header: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     picture: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     title: [256]u16 = @splat(0),
+    title_refreshed_ms: u64 = 0,
+    title_refresh_initialized: bool = false,
     icon: HICON = null,
     visible: bool = false,
     last_result: i64 = 0,
@@ -237,6 +241,20 @@ pub const ThumbnailAdapter = struct {
         return self.hwnd != null;
     }
 
+    fn refreshTitle(self: *ThumbnailAdapter, source: HWND) void {
+        const now = GetTickCount64();
+        if (self.title_refresh_initialized and now -| self.title_refreshed_ms < title_refresh_interval_ms) return;
+        self.title_refresh_initialized = true;
+        self.title_refreshed_ms = now;
+
+        var updated: [256]u16 = @splat(0);
+        _ = GetWindowTextW(source, &updated, @intCast(updated.len));
+        if (!std.mem.eql(u16, &self.title, &updated)) {
+            self.title = updated;
+            self.chrome_dirty = true;
+        }
+    }
+
     pub fn begin(self: *ThumbnailAdapter, source: HWND) Size {
         const window = self.hwnd orelse return .{ .cx = 0, .cy = 0 };
         if (source == null or IsWindow(source) == 0) return .{ .cx = 0, .cy = 0 };
@@ -258,12 +276,12 @@ pub const ThumbnailAdapter = struct {
                 return self.source_size;
             }
             self.source = source;
-            self.title = @splat(0);
-            _ = GetWindowTextW(source, &self.title, @intCast(self.title.len));
+            self.title_refresh_initialized = false;
             var class_icon = GetClassLongPtrW(source, gclp_hiconsm);
             if (class_icon == 0) class_icon = GetClassLongPtrW(source, gclp_hicon);
             self.icon = if (class_icon == 0) null else @ptrFromInt(class_icon);
         }
+        self.refreshTitle(source);
         self.source_size = .{ .cx = 0, .cy = 0 };
         if (self.thumbnail) |thumbnail| _ = DwmQueryThumbnailSourceSize(thumbnail, &self.source_size);
         return self.source_size;

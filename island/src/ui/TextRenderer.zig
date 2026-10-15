@@ -41,6 +41,9 @@ pub const TaskButton = struct {
     title_bounds: Geometry.RectF = .{},
     hover_progress: f32 = 0,
     active: bool = false,
+    visual_opacity: f32 = 1,
+    visual_scale: f32 = 1,
+    visual_offset_y: f32 = 0,
 };
 
 /// Feature supplied content for the reusable media-card drawing primitive.
@@ -433,6 +436,32 @@ pub const TextRenderer = struct {
         });
     }
 
+    pub fn drawFullscreenMorphSurface(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, fill_opacity_arg: f32, shadow_opacity_arg: f32) void {
+        _ = self;
+        const context = context_arg orelse return;
+        if (Geometry.width(box.rect) <= 0 or Geometry.height(box.rect) <= 0) return;
+        const theme = Theme.currentTheme();
+        const shadow_opacity = theme.shadow * std.math.clamp(shadow_opacity_arg, 0, 1) * 0.55;
+        if (shadow_opacity > 0.001) {
+            fillRounded(context, .{
+                .rect = .{
+                    .left = box.rect.left - 1,
+                    .top = box.rect.top + 2,
+                    .right = box.rect.right + 1,
+                    .bottom = box.rect.bottom + 3,
+                },
+                .radius_x = box.radius_x + 1,
+                .radius_y = box.radius_y + 1,
+            }, .{ .r = 0, .g = 0, .b = 0, .a = shadow_opacity });
+        }
+        fillRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, .{
+            .r = theme.pill_bottom.r,
+            .g = theme.pill_bottom.g,
+            .b = theme.pill_bottom.b,
+            .a = theme.pill_bottom.a * std.math.clamp(fill_opacity_arg, 0, 1),
+        });
+    }
+
     /// Paints the common card material used by system, music, tray, Start,
     /// feature, and notification cards.
     pub fn drawCardSurface(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, opacity_arg: f32) void {
@@ -494,6 +523,14 @@ pub const TextRenderer = struct {
     pub fn drawFeatureLine(self: *TextRenderer, context_arg: Handle, from: [2]f32, to: [2]f32, color: Theme.Color, thickness: f32) void {
         _ = self;
         if (context_arg) |context| drawLine(context, .{ .x = from[0], .y = from[1] }, .{ .x = to[0], .y = to[1] }, asD2D(color), thickness);
+    }
+
+    pub fn drawCenteredIconGlyph(self: *TextRenderer, context_arg: Handle, glyph: u16, bounds: Geometry.RectF, opacity: f32) bool {
+        const context = context_arg orelse return false;
+        const format = self.music_glyph_format orelse return false;
+        const text: [2]u16 = .{ glyph, 0 };
+        drawTextWithColor(context, format, &text, asD2D(Theme.themeInk(opacity)), toD2DRect(bounds));
+        return true;
     }
 
     pub fn pushClip(self: *TextRenderer, context_arg: Handle, clip: Geometry.RectF) void {
@@ -973,7 +1010,9 @@ pub const TextRenderer = struct {
         if (count == 0 or opacity <= 0.01) return true;
 
         for (buttons[0..count]) |button| {
-            const box = button.bounds;
+            const button_opacity = opacity * std.math.clamp(button.visual_opacity, 0, 1);
+            if (button_opacity <= 0.005) continue;
+            const box = transformTaskRect(button.bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
             if (box.right <= box.left or box.bottom <= box.top) continue;
             const side = @min(box.right - box.left, box.bottom - box.top);
             const rounded = D2DRoundedRect{
@@ -984,22 +1023,23 @@ pub const TextRenderer = struct {
             const hover = @max(button.hover_progress, 0);
             const hover_effect = @min(hover, 1);
 
-            fillRounded(context, rounded, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = opacity });
+            fillRounded(context, rounded, .{ .r = 0.055, .g = 0.067, .b = 0.084, .a = button_opacity });
             if (button.active) {
-                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.11 * opacity });
+                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.11 * button_opacity });
             }
             if (hover > 0.01) {
-                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.10 * opacity * hover_effect });
+                fillRounded(context, rounded, .{ .r = 0.29, .g = 0.60, .b = 0.98, .a = 0.10 * button_opacity * hover_effect });
             }
 
             if (button.icon) |icon| {
-                drawMusicBitmap(context, icon, button.icon_bounds, opacity, 0);
+                drawMusicBitmap(context, icon, transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y), button_opacity, 0);
             }
-            if (button.window_count > 1) drawWindowStackMark(context, button.icon_bounds, opacity);
+            if (button.window_count > 1) drawWindowStackMark(context, transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y), button_opacity);
 
             if (button.title) |task_title| {
-                const title_width = button.title_bounds.right - button.title_bounds.left;
-                const title_opacity = std.math.clamp((title_width - 16) / 32, 0, 1) * opacity;
+                const title_bounds = transformTaskRect(button.title_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
+                const title_width = title_bounds.right - title_bounds.left;
+                const title_opacity = std.math.clamp((title_width - 16) / 32, 0, 1) * button_opacity;
                 if (task_title[0] != 0 and title_opacity > 0.01 and button.title_bounds.right > button.title_bounds.left) {
                     const color = D2DColor{
                         .r = 0.94,
@@ -1007,22 +1047,34 @@ pub const TextRenderer = struct {
                         .b = 0.98,
                         .a = title_opacity,
                     };
-                    drawTaskTitle(self, context, std.mem.span(task_title), button.active, color, button.title_bounds, @max(12, self.metrics().secondary_line_height));
+                    drawTaskTitle(self, context, std.mem.span(task_title), button.active, color, title_bounds, @max(12, self.metrics().secondary_line_height));
                 }
             }
 
             if (button.active) {
-                const indicator_width = @max(16, box.right - box.left - 22);
-                const indicator_left = box.left + 11;
+                const indicator_width = @max(16, box.right - box.left - 22 * button.visual_scale);
+                const indicator_left = box.left + 11 * button.visual_scale;
                 const indicator = D2DRoundedRect{
-                    .rect = .{ .left = indicator_left, .top = box.bottom + 2, .right = indicator_left + indicator_width, .bottom = box.bottom + 5 },
-                    .radius_x = 1.5,
-                    .radius_y = 1.5,
+                    .rect = .{ .left = indicator_left, .top = box.bottom + 2 * button.visual_scale, .right = indicator_left + indicator_width, .bottom = box.bottom + 5 * button.visual_scale },
+                    .radius_x = 1.5 * button.visual_scale,
+                    .radius_y = 1.5 * button.visual_scale,
                 };
-                fillRounded(context, indicator, .{ .r = 0.28, .g = 0.64, .b = 1, .a = 0.98 * opacity });
+                fillRounded(context, indicator, .{ .r = 0.28, .g = 0.64, .b = 1, .a = 0.98 * button_opacity });
             }
         }
         return true;
+    }
+
+    fn transformTaskRect(rect: Geometry.RectF, button: Geometry.RectF, scale: f32, offset_x: f32, offset_y: f32) Geometry.RectF {
+        const safe_scale = @max(0, scale);
+        const centre_x = (button.left + button.right) * 0.5;
+        const centre_y = (button.top + button.bottom) * 0.5;
+        return .{
+            .left = centre_x + (rect.left - centre_x) * safe_scale + offset_x,
+            .top = centre_y + (rect.top - centre_y) * safe_scale + offset_y,
+            .right = centre_x + (rect.right - centre_x) * safe_scale + offset_x,
+            .bottom = centre_y + (rect.bottom - centre_y) * safe_scale + offset_y,
+        };
     }
 
     /// Draws the independently floating overflow surface, its retained system
@@ -1058,24 +1110,28 @@ pub const TextRenderer = struct {
 
         const line_height = @max(12, self.metrics().secondary_line_height);
         for (buttons) |button| {
-            const bounds = button.bounds;
+            const button_opacity = opacity * std.math.clamp(button.visual_opacity, 0, 1);
+            if (button_opacity <= 0.005) continue;
+            const bounds = transformTaskRect(button.bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
             if (bounds.right <= bounds.left or bounds.bottom <= bounds.top) continue;
             const tile = D2DRoundedRect{ .rect = toD2DRect(bounds), .radius_x = 12, .radius_y = 12 };
-            fillRounded(context, tile, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = opacity });
-            if (button.active) fillRounded(context, tile, .{ .r = 0.20, .g = 0.38, .b = 0.60, .a = 0.38 * opacity });
+            fillRounded(context, tile, .{ .r = 0.08, .g = 0.093, .b = 0.112, .a = button_opacity });
+            if (button.active) fillRounded(context, tile, .{ .r = 0.20, .g = 0.38, .b = 0.60, .a = 0.38 * button_opacity });
             if (button.icon) |icon| {
-                const icon_box = button.icon_bounds;
-                drawMusicBitmap(context, icon, icon_box, opacity, 1);
+                const icon_box = transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
+                drawMusicBitmap(context, icon, icon_box, button_opacity, 1);
             }
-            if (button.window_count > 1) drawWindowStackMark(context, button.icon_bounds, opacity);
+            const icon_box = transformTaskRect(button.icon_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
+            if (button.window_count > 1) drawWindowStackMark(context, icon_box, button_opacity);
             if (button.title) |task_title| {
                 if (task_title[0] != 0) {
+                    const title_bounds = transformTaskRect(button.title_bounds, button.bounds, button.visual_scale, 0, button.visual_offset_y);
                     drawTaskTitle(self, context, std.mem.span(task_title), button.active, .{
                         .r = 0.89,
                         .g = 0.90,
                         .b = 0.93,
-                        .a = 0.9 * opacity,
-                    }, button.title_bounds, line_height);
+                        .a = 0.9 * button_opacity,
+                    }, title_bounds, line_height);
                 }
             }
         }

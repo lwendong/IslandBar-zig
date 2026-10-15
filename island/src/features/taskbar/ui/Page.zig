@@ -6,6 +6,9 @@ const Presentation = @import("TaskbarPresentation");
 const TextRenderer = @import("TextRenderer");
 
 pub const View = Presentation.View;
+pub const TrayIconInput = Presentation.TrayIconInput;
+pub const TrayDockIcon = Presentation.TrayDockIcon;
+pub const max_tray_icons = Presentation.max_tray_icons;
 
 pub fn buildView(
     island: Geometry.RoundedBox,
@@ -23,7 +26,20 @@ pub fn buildDockView(
     monitor_width_dip: f32,
     overflow_open: bool,
 ) View {
-    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, false);
+    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, false, &.{}, 0);
+}
+
+pub fn buildDockViewWithTray(
+    island: Geometry.RoundedBox,
+    input: []const TextRenderer.TaskButton,
+    catalog_revision: u64,
+    visible_count: usize,
+    monitor_width_dip: f32,
+    overflow_open: bool,
+    tray_icons: []const TrayIconInput,
+    tray_catalog_revision: u64,
+) View {
+    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, false, tray_icons, tray_catalog_revision);
 }
 
 pub fn buildDockViewWithHover(
@@ -40,7 +56,7 @@ pub fn buildDockViewWithHover(
         HoverOverride{ .window_id = id, .progress = hover_progress_arg }
     else
         null;
-    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, hover_override, false);
+    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, hover_override, false, &.{}, 0);
 }
 
 pub fn buildDockViewWithHoverProgress(
@@ -51,7 +67,20 @@ pub fn buildDockViewWithHoverProgress(
     monitor_width_dip: f32,
     overflow_open: bool,
 ) View {
-    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, true);
+    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, true, &.{}, 0);
+}
+
+pub fn buildDockViewWithHoverProgressAndTray(
+    island: Geometry.RoundedBox,
+    input: []const TextRenderer.TaskButton,
+    catalog_revision: u64,
+    visible_count: usize,
+    monitor_width_dip: f32,
+    overflow_open: bool,
+    tray_icons: []const TrayIconInput,
+    tray_catalog_revision: u64,
+) View {
+    return buildDockViewInternal(island, input, catalog_revision, visible_count, monitor_width_dip, overflow_open, null, true, tray_icons, tray_catalog_revision);
 }
 
 const HoverOverride = struct {
@@ -68,6 +97,8 @@ fn buildDockViewInternal(
     overflow_open: bool,
     hover_override: ?HoverOverride,
     use_source_hover_progress: bool,
+    tray_input: []const TrayIconInput,
+    tray_catalog_revision: u64,
 ) View {
     const total = @min(input.len, Layout.max_task_icons);
     const visible = @min(visible_count, total);
@@ -86,17 +117,19 @@ fn buildDockViewInternal(
         hover_progresses[index] = progress;
         requested_extra_total += (Layout.task_icon_hover_width_dip - Layout.task_icon_button_dip) * progress;
     }
-    const available_extra = @max(0, Layout.taskIconAvailableWidthForMonitor(monitor_width_dip) - base_row_width);
-    const expansion_scale = if (requested_extra_total > available_extra and requested_extra_total > 0)
-        available_extra / requested_extra_total
-    else
-        1;
+    const tray_count = Layout.trayIconsThatFitForMonitor(monitor_width_dip, visible, tray_input.len);
+    const tray_width = @as(f32, @floatFromInt(tray_count)) * Layout.tray_icon_button_dip +
+        @as(f32, @floatFromInt(if (tray_count > 0) tray_count - 1 else 0)) * Layout.tray_icon_gap_dip;
+    const reserved_width = base_row_width + tray_width + (if (tray_count > 0 and visible > 0) Layout.task_tray_gap_dip else 0);
+    const available_extra = @max(0, Layout.taskIconAvailableWidthForMonitor(monitor_width_dip) - reserved_width);
+    const expansion_scale = if (requested_extra_total > available_extra and requested_extra_total > 0) available_extra / requested_extra_total else 1;
     var view = View{
         .catalog_revision = catalog_revision,
         .island = island,
         .count = visible,
         .overflow_count = total - visible,
         .overflow_open = overflow_open,
+        .tray_count = tray_count,
     };
     var next_left = island.rect.right + Layout.task_icon_pad_dip;
     for (input[0..visible], 0..) |source, index| {
@@ -110,8 +143,26 @@ fn buildDockViewInternal(
         button.title_bounds = Layout.taskIconTitleInBox(button.bounds);
         button.hover_progress = if (is_hovered) hover_progress else 0;
         view.buttons[index] = button;
+        view.task_row_bounds = unionBounds(view.task_row_bounds, button.bounds);
         view.row_bounds = unionBounds(view.row_bounds, button.bounds);
         next_left = button.bounds.right + Layout.task_icon_gap_dip;
+    }
+    var tray_left = if (view.task_row_bounds.right > view.task_row_bounds.left)
+        view.task_row_bounds.right + Layout.task_tray_gap_dip
+    else
+        island.rect.right + Layout.task_icon_pad_dip;
+    for (tray_input[0..tray_count], 0..) |source, index| {
+        const bounds = Layout.trayIconButtonAt(island, tray_left);
+        view.tray_icons[index] = .{
+            .png = source.png,
+            .source_index = source.source_index,
+            .fingerprint = source.fingerprint,
+            .revision = tray_catalog_revision,
+            .bounds = bounds,
+            .icon_bounds = Layout.trayIconInBox(bounds),
+        };
+        view.row_bounds = unionBounds(view.row_bounds, bounds);
+        tray_left = bounds.right + Layout.tray_icon_gap_dip;
     }
     const row_right = if (view.row_bounds.right > view.row_bounds.left) view.row_bounds.right else island.rect.right;
     view.overflow_button_bounds = Layout.overflowButtonFor(island, row_right);
@@ -131,6 +182,59 @@ fn buildDockViewInternal(
     return view;
 }
 
+/// Applies a presentation-time horizontal offset to a task and keeps the row
+/// bounds in sync so drawing, pointer hit testing, and the native input region
+/// follow the same animated position.
+pub fn applyHorizontalOffset(view: *View, window_id: Catalog.WindowId, offset_x: f32) bool {
+    for (view.buttons[0..@min(view.count, view.buttons.len)]) |*button| {
+        if (button.window_id != window_id) continue;
+        translateButtonBounds(button, offset_x);
+        view.task_row_bounds = unionBounds(view.task_row_bounds, button.bounds);
+        view.row_bounds = unionBounds(view.row_bounds, button.bounds);
+        return true;
+    }
+    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| {
+        if (button.window_id != window_id) continue;
+        translateButtonBounds(button, offset_x);
+        return true;
+    }
+    return false;
+}
+
+/// Moves the tray group and its trailing overflow control together while a
+/// task removal animation frees horizontal space.
+pub fn applyTrayDockOffset(view: *View, offset_x: f32) void {
+    if (@abs(offset_x) < 0.001) return;
+    for (view.tray_icons[0..@min(view.tray_count, view.tray_icons.len)]) |*icon| {
+        translateRectX(&icon.bounds, offset_x);
+        translateRectX(&icon.icon_bounds, offset_x);
+    }
+    translateRectX(&view.overflow_button_bounds, offset_x);
+    translateRectX(&view.overflow_bounds.rect, offset_x);
+    translateRectX(&view.system_entry_bounds, offset_x);
+    translateRectX(&view.tray_entry_bounds, offset_x);
+    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| translateButtonBounds(button, offset_x);
+
+    view.row_bounds = view.task_row_bounds;
+    for (view.tray_icons[0..@min(view.tray_count, view.tray_icons.len)]) |icon| {
+        view.row_bounds = unionBounds(view.row_bounds, icon.bounds);
+    }
+}
+
+fn translateRectX(rect: *Geometry.RectF, offset_x: f32) void {
+    rect.left += offset_x;
+    rect.right += offset_x;
+}
+
+fn translateButtonBounds(button: *TextRenderer.TaskButton, offset_x: f32) void {
+    button.bounds.left += offset_x;
+    button.bounds.right += offset_x;
+    button.icon_bounds.left += offset_x;
+    button.icon_bounds.right += offset_x;
+    button.title_bounds.left += offset_x;
+    button.title_bounds.right += offset_x;
+}
+
 pub fn actionAt(view: *const View, x: f32, y: f32) ?Catalog.WindowId {
     for (view.buttons[0..view.count]) |button| {
         if (button.window_id != 0 and contains(button.bounds, x, y)) return button.window_id;
@@ -139,6 +243,13 @@ pub fn actionAt(view: *const View, x: f32, y: f32) ?Catalog.WindowId {
         for (view.overflow_buttons[0..view.overflow_count]) |button| {
             if (button.window_id != 0 and contains(button.bounds, x, y)) return button.window_id;
         }
+    }
+    return null;
+}
+
+pub fn trayIconAt(view: *const View, x: f32, y: f32) ?Presentation.TrayDockIcon {
+    for (view.tray_icons[0..view.tray_count]) |icon| {
+        if (contains(icon.bounds, x, y)) return icon;
     }
     return null;
 }
@@ -167,7 +278,7 @@ pub fn hoverTarget(view: *const View, current: ?Catalog.WindowId, x: f32, y: f32
     }
     if (current) |id| {
         for (view.buttons[0..view.count]) |button| {
-            if (button.window_id == id and contains(view.row_bounds, x, y)) return current;
+            if (button.window_id == id and contains(view.task_row_bounds, x, y)) return current;
         }
     }
     return null;

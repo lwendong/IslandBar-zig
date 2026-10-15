@@ -13,6 +13,11 @@ pub const task_icon_hover_width_dip: f32 = 148;
 pub const task_icon_hover_progress_max: f32 = 1;
 pub const task_icon_gap_dip: f32 = 8;
 pub const task_icon_pad_dip: f32 = 12;
+pub const tray_icon_button_dip: f32 = 24;
+pub const tray_icon_size_dip: f32 = 16;
+pub const tray_icon_gap_dip: f32 = 3;
+pub const task_tray_gap_dip: f32 = 10;
+pub const max_visible_tray_icons: usize = 24;
 pub const dock_gap_dip: f32 = BarLayout.dock_gap_dip;
 pub const row_right_margin_dip: f32 = 20;
 pub const overflow_panel_width_dip: f32 = 272;
@@ -95,6 +100,18 @@ pub fn taskIconsThatFitForMonitor(monitor_width_dip: f32, wanted: usize) usize {
     return @min(@min(wanted, max_visible_task_icons), fit_count);
 }
 
+pub fn trayIconsThatFitForMonitor(monitor_width_dip: f32, visible_task_count: usize, wanted: usize) usize {
+    if (wanted == 0) return 0;
+    const task_width = @as(f32, @floatFromInt(visible_task_count)) * task_icon_button_dip +
+        @as(f32, @floatFromInt(if (visible_task_count > 0) visible_task_count - 1 else 0)) * task_icon_gap_dip;
+    const available = @max(0, taskIconAvailableWidthForMonitor(monitor_width_dip) - task_width -
+        (if (visible_task_count > 0) task_tray_gap_dip else 0));
+    if (available < tray_icon_button_dip) return 0;
+    const slot = tray_icon_button_dip + tray_icon_gap_dip;
+    const fit_count: usize = @intFromFloat((available + tray_icon_gap_dip) / slot);
+    return @min(@min(wanted, max_visible_tray_icons), fit_count);
+}
+
 pub fn taskIconHoverWidthForMonitor(monitor_width_dip: f32, count: usize, progress_arg: f32) f32 {
     if (count == 0) return task_icon_button_dip;
     const base_width = @as(f32, @floatFromInt(count)) * task_icon_button_dip +
@@ -139,6 +156,27 @@ pub fn taskIconTitleInBox(button: RectF) RectF {
     const icon_left = button.left + (task_icon_button_dip - task_icon_size_dip) * 0.5;
     const left = icon_left + task_icon_size_dip + 8;
     return .{ .left = left, .top = button.top, .right = button.right - 8, .bottom = button.bottom };
+}
+
+pub fn trayIconButtonAt(island: RoundedBox, left: f32) RectF {
+    const centre_y = (island.rect.top + island.rect.bottom) * 0.5;
+    return .{
+        .left = left,
+        .top = centre_y - tray_icon_button_dip * 0.5,
+        .right = left + tray_icon_button_dip,
+        .bottom = centre_y + tray_icon_button_dip * 0.5,
+    };
+}
+
+pub fn trayIconInBox(button: RectF) RectF {
+    const centre_x = (button.left + button.right) * 0.5;
+    const centre_y = (button.top + button.bottom) * 0.5;
+    return .{
+        .left = centre_x - tray_icon_size_dip * 0.5,
+        .top = centre_y - tray_icon_size_dip * 0.5,
+        .right = centre_x + tray_icon_size_dip * 0.5,
+        .bottom = centre_y + tray_icon_size_dip * 0.5,
+    };
 }
 
 test "taskbar layout keeps circular buttons at a fixed size with consistent gaps" {

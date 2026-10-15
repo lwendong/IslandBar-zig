@@ -635,3 +635,95 @@ Windows 实机回归（操作 + 结果）：
 - **Windows 实机：** `WIN-TASKBAR-002` 覆盖同 exe 多窗口只显示一个任务图标、叠窗标记、活动状态跟随、组内点击切换以及窗口开关更新；状态 `MANUAL_PENDING`，未声称已实机验证。
 - **风险 / 未验证：** 分组键使用 executable path，不读取 Explorer 内部按钮集合；无法访问路径时跨进程的同应用窗口无法合组。当前多窗口组悬停只展示一个代表窗口，不提供多缩略图选择面板。WinEvent 回调、动画期事件、真实前台切换、图标构成和多显示器行为需桌面验收。
 - **回退方式：** 仅反向 UI-017：任务快照恢复逐窗口 Entry，移除 executable path/group ID/window_count、应用组动作选择及叠窗绘制；恢复任务按钮从逐窗口列表构建；撤回 `WIN-TASKBAR-002` 和本记录。保留 UI-016 的 WinEvent/500 ms 刷新机制作为独立窗口同步改动，若需整体回退，再单独移除事件 hooks、回调及刷新辅助逻辑；不重置工作区其他更改。
+
+## UI-018 — 任务图标增删时平滑淡入淡出
+
+- **日期 / 目标：** 2026-10-16；任务窗口列表变化时，图标不再直接蹦出或消失。
+- **实现：** 新任务图标约 160 ms 轻微缩放、下移并淡入；移除任务时保留不参与命中的绘制副本，淡出并缩回后释放图标缓存。更多任务面板中的图标使用同一视觉进度；保留 TaskbarPage 的命中几何和有效任务动作。删除 Renderer 中未被读取的旧任务图标动画缓存字段。
+- **改动文件：** `island/src/app/main.zig`、`island/src/ui/TaskbarPresentation.zig`、`island/src/ui/Renderer.zig`、`island/src/ui/TextRenderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未改变任务分组键、窗口动作、任务栏布局、hover 动画或架构文档状态；未新增测试、安装器或资源。
+- **验证：** Zig `0.17.0`，`zig fmt --check src/app/main.zig src/ui/Renderer.zig src/ui/TaskbarPresentation.zig` 退出码 0；`TextRenderer.zig` 的 Zig `fmt --stdin` 比较通过（文件路径格式化入口重复返回 `Unexpected`，以 stdin 格式核对处理）。`zig build --summary all --cache-dir .zig-cache-task-icon-transition` 退出码 0，16/16 steps，应用、安装器和所有 smoke/probe 编译成功。`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增/移除/未解析；`git diff --check` 退出码 0。未添加或运行测试。
+- **Windows 实机：** 新增 `WIN-TASKBAR-003` 检查任务行和更多任务面板图标增删动画及命中；状态 `MANUAL_PENDING`，本轮没有实际桌面窗口可操作。
+- **风险 / 未验证：** 160 ms 时长、D2D alpha/缩放合成效果和动画中真实点击尚未人工确认。窗口列表在动画过程中再次变化时，会按最新目录重建过渡状态。
+- **回退方式：** 仅撤销 UI-018：移除 `PaintContext` 过渡时间线、TaskbarPresentation 退出绘制副本与 TextRenderer 视觉变换；恢复 Renderer 只解析当前任务按钮及原缓存清理范围；回退 `WIN-TASKBAR-003` 与本记录。保留 UI-017 的实时同步和应用分组，不重置工作区其他改动。
+
+## UI-019 — 任务图标删除时平滑补位
+
+- **日期 / 目标：** 2026-10-16；根据实机反馈修复任务图标退出时右侧项目立即补位、遮住淡出效果的问题。
+- **原因与实现：** 旧图标淡出时新布局已即时生效，剩余图标没有位置过渡，视觉上像图标直接消失。现在在 180 ms 过渡内，保留图标从旧横坐标滑向新位置；退出图标缩至约 68% 并淡出，绘制在移动图标之后以便交叉显露。新图标淡入范围也从 88% 加强到 82%；移动采用 ease-out 曲线，让首帧就能看见补位。
+- **改动文件：** `island/src/app/main.zig`、`island/src/features/taskbar/ui/Page.zig`、`island/src/ui/TextRenderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 移动期间绘制、任务命中和输入区域共用 TaskbarPage 同一组插值 bounds；任务分组、窗口动作、hover 逻辑和缓存生命周期没有改变。未新增或运行测试。
+- **验证：** Zig `0.17.0`。`zig fmt --check src/app/main.zig src/features/taskbar/ui/Page.zig src/ui/Renderer.zig src/ui/TaskbarPresentation.zig` 退出码 0；`TextRenderer.zig` 的 Zig `fmt --stdin` 格式比较通过。`zig build --summary all --cache-dir .zig-cache-task-icon-transition` 退出码 0，16/16 steps。`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增/移除/未解析；`git diff --check` 退出码 0。未添加或运行测试。
+- **Windows 实机：** `WIN-TASKBAR-003` 增补检查右侧任务从旧位置滑入空位；状态 `MANUAL_PENDING`，尚未在桌面实测。
+- **风险 / 未验证：** 新增/退出图标缩放时命中仍覆盖原按钮完整 bounds；连续目录变化可能重建正在播放的过渡状态。需在快速开关窗口时检查视觉和命中连贯性。
+- **回退方式：** 仅撤销 UI-019：移除 TaskbarPage 横向 bounds 插值和 `.move` transition，恢复仅淡入/淡出的 160 ms 过渡；撤回 `WIN-TASKBAR-003` 的补位验收句及本记录。保留 UI-018 的独立增删淡入淡出实现和 UI-017 窗口同步，不重置其它改动。
+
+## UI-020 — 稳定全屏检测并记录前台窗口
+
+- **日期 / 目标：** 2026-10-16；处理点击桌面空白处时全屏检测在“全屏/普通”之间反复切换，导致整个灵动岛暂时消失的问题。
+- **原因：** 原检测每 250 ms 用前台窗口是否覆盖整台显示器推测全屏状态，并立即提交结果；普通桌面、壁纸宿主或其它临时前台窗口若通过几何条件且未命中有限的 Shell 类排除规则，会被误判。旧日志未记录被检查窗口，无法分辨具体来源。
+- **实现：** 新增 `Monitor.probeFullScreenApp`，保留原判断条件并返回 HWND、PID、窗口类名、范围、可见/最小化/最大化状态和判定原因；只在全屏候选变化时记录这些信息。`pointerStep` 要求两次连续 250 ms 采样一致后才提交状态并调整 AppBar，单次误判不再立即隐藏灵动岛。`fullScreenAppInFront` 保留为兼容布尔封装。
+- **改动文件：** `island/src/platform/windows/Monitor.zig`、`island/src/app/main.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未改变真实全屏判定的既有几何规则、窗口尺寸、UI 绘制或应用功能；架构文档保持 `PROPOSED`。未添加或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt --check src/platform/windows/Monitor.zig src/app/main.zig` 退出码 0；`zig build --summary all --cache-dir .zig-cache-fullscreen-stability` 退出码 0，16/16 steps（IslandBar、安装器和全部 smoke/probe）。`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析。`git diff --check` 退出码 0；只有仓库 LF→CRLF 提示。
+- **Windows 实机：** 更新 `WIN-WINDOW-001` 检查空白桌面点击、全屏状态稳定性和候选窗口诊断；仍为 `MANUAL_PENDING`。尚未在用户机器上启动本轮构建并确认实际误判窗口，因此不声称实机问题已经解决。
+- **风险 / 未验证：** 两次确认会给全屏状态切换带来约一个轮询周期（最多约 250 ms）的响应延迟；动态壁纸/桌面宿主的具体窗口是否需要加入排除规则，须依据新日志中的 class/PID/rect 再确认。没有运行安装器或桌面 GUI。
+- **回退方式：** 恢复 `Monitor.fullScreenAppInFront` 原内联判断并删除 `FullscreenProbe`；恢复 `pointerStep` 每次测量立即更新状态，移除 PaintContext 候选字段和诊断日志；撤回 `WIN-WINDOW-001` 本步内容与本记录。保留其它 UI-018/UI-019 改动，不重置工作区。
+
+## UI-021 — 全屏圆形收缩动画节奏与遮挡优化
+
+- **日期 / 目标：** 2026-10-16；让应用全屏与返回窗口化时的收缩/展开动画使用同一时长和连贯节奏，并缩小、淡化顶部通知圆，减少遮挡全屏内容。
+- **原因：** 原动画虽共用名义时长，但对进度连续叠加缓出曲线，圆形又在进度超过 54% 后才开始显示；两段效果造成收缩和展开观感不对称。原圆直径与灵动岛高度相同且带阴影，对全屏画面的遮挡偏大。
+- **实现：** 收缩与展开沿用同一 360 ms 时间，使用对称 cubic ease-in-out；进度只缓动一次，岛内整体按同一进度缩至 4% 并淡出，34 DIP 通知圆从动画起点同步淡入，背景 alpha 降至主题底色的 42%，移除阴影，铃铛 glyph 保持较高可读度。圆形窗口输入裁剪留 2 DIP 抗锯齿空间；收缩、稳定和展开期间均穿透鼠标输入，直到恢复完成，避免圆形或动画中的旧任务区域拦截全屏应用输入。
+- **改动文件：** `island/src/app/main.zig`、`island/src/core/Motion.zig`、`island/src/ui/Renderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 保留 UI-020 的前台窗口采样与判定规则、两次采样稳定器、进入全屏前的 Motion 展示状态及 AppBar 逻辑；未改其他页面、任务分组、系统集成、安装器、资源或架构文档状态。未添加或运行单元测试。
+- **自动验证：** Zig `0.17.0`。`zig fmt src/app/main.zig src/core/Motion.zig src/ui/Renderer.zig` 退出码 0；`zig fmt --check src/app/main.zig src/core/Motion.zig src/ui/Renderer.zig` 退出码 0。默认沙箱首次 `zig build` 因无法读取 Zig 安装目录失败（`FileNotFound`）；在获准读取本机 Zig 标准库/Windows SDK 的调用中，以 `.zig-cache-fullscreen-presentation-v2` 执行 `zig build --summary all`，退出码 0、16/16 steps 成功（IslandBar、安装器、全部 smoke/probe）。架构守卫退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析。`git diff --check` 退出码 0；仅有仓库 LF→CRLF 提示。
+- **Windows 实机：** `WIN-WINDOW-001` 增加相同动画时长、34 DIP 半透明通知圆与全屏点击穿透检查；状态 `MANUAL_PENDING`。当前构建通过但尚未在真实全屏应用上进行视觉/输入验收。
+- **风险 / 未验证：** D2D/DirectComposition 上的缓动观感、半透明 alpha、Segoe MDL2 通知 glyph、真实应用下点击穿透和状态恢复仍需 Windows 实机确认；构建结果不能替代这些视觉与交互结论。
+- **回退方式：** 仅撤销 UI-021：恢复旧圆直径与输入裁剪留白、旧进度缓出和圆形延迟淡入/带阴影绘制、旧全屏过渡输入门控；撤回 `WIN-WINDOW-001` 本步验收句及本记录。保留 UI-020 的检测诊断、双采样稳定器与其它 UI-018/UI-019 改动，不重置工作区。
+
+## UI-022 — 全屏小圆与工具栏部件线性变形
+
+- **日期 / 目标：** 2026-10-16；消除全屏小圆像单独覆盖上去的割裂感，按用户指定的顺序让小圆与其余 UI 连续互变。
+- **实现：** 将同一 360 ms 过渡分成两个线性阶段。窗口化→全屏时，前半段原有界面部件向中心汇拢、主体形状收至中心胶囊；后半段胶囊连续收窄为 34 DIP 小圆并由深色变为 42% alpha。全屏→窗口化严格反向：小圆拉伸并变黑，再由中心胶囊线性展开原有部件。小圆/通知铃铛是中心主体的最终形态，不再作为绘制末尾的独立叠加层。
+- **改动文件：** `island/src/app/main.zig`、`island/src/core/Motion.zig`、`island/src/ui/Renderer.zig`、`island/src/ui/TextRenderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 保留 UI-020 的全屏采样稳定器、诊断日志和 AppBar 逻辑；保留 UI-021 的 34 DIP 目标圆与过渡期点击穿透；不改变其余页面、任务行为、安装器、资源或架构状态。未新增或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt src/app/main.zig src/core/Motion.zig src/ui/Renderer.zig src/ui/TextRenderer.zig` 退出码 0；完整 `zig build --summary all --cache-dir .zig-cache-fullscreen-morph-linear` 在获准读取本机 Zig 标准库/Windows SDK 后退出码 0，16/16 steps 成功（IslandBar、安装器及全部 smoke/probe）。
+- **Windows 实机：** `WIN-WINDOW-001` 更新为检查两阶段线性收拢/展开、alpha 变化与过渡期输入穿透；状态 `MANUAL_PENDING`，尚无真实桌面视觉验收。
+- **风险 / 未验证：** 主体在 expanded/music/notification 状态下由源几何收敛到中心胶囊的连续观感及真实全屏覆盖仍待实机确认；自动构建无法判断阶段交界的主观连贯性。
+- **回退方式：** 仅反向 UI-022：移除 `fullscreenMorphBox` 和 `drawFullscreenMorphSurface`，恢复 UI-021 的一次性统一缩放/淡化加末尾通知圆层，并恢复 ease-in-out 进度；撤回本条及 `WIN-WINDOW-001` 对两阶段变形的验收描述。保留 UI-020 检测、UI-021 圆形尺寸/低遮挡及其它 UI-018/UI-019 工作，不重置工作区。
+
+## UI-023 — 同窗口标题变化刷新任务预览
+
+- **日期 / 目标：** 2026-10-16；修复浏览器切换活动标签页后，DWM 缩略图已经显示新页面但预览标题仍停留在旧标签页的问题。
+- **原因：** `ThumbnailAdapter.begin()` 只在预览源 HWND 变化或重新注册 DWM 缩略图时读取 `GetWindowTextW`。同一浏览器窗口切换标签页时 HWND 不变，标题缓存未更新，而 DWM 缩略图内容继续实时变化。
+- **实现：** `ThumbnailAdapter` 每 120 ms 检查一次当前预览源窗口标题；只有 UTF-16 标题实际改变时才更新缓存并标记标题区需要重绘。新预览源立即执行首次读取，标题重绘沿用既有 `place()` / `chrome_dirty` 流程。
+- **改动文件：** `island/src/platform/windows/ThumbnailAdapter.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 不改窗口枚举/分组、DWM 缩略图来源、任务栏布局、标题样式或预览动画；未新增或运行测试。
+- **自动验证：** Zig `0.17.0`。`zig fmt --check src/platform/windows/ThumbnailAdapter.zig` 退出码 0；`zig build --summary all --cache-dir .zig-cache-task-preview-title` 退出码 0，16/16 steps（IslandBar、安装器和全部 smoke/probe）；依赖守卫退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0。未运行测试。
+- **Windows 实机：** `WIN-TASKBAR-001` 加入同一浏览器 HWND 内切换标签页并核对标题/缩略图一致的检查；状态仍为 `MANUAL_PENDING`，本轮未执行桌面 GUI 实测。
+- **风险 / 未验证：** 标题最多每 120 ms 检查一次；若应用切换标签页时不更新顶层窗口标题，系统提供的 `GetWindowTextW` 无法获知其标签文本。真实浏览器和高刷新时序仍待实机确认。
+- **回退方式：** 移除 `title_refresh_interval_ms`、`GetTickCount64` 声明、标题刷新状态字段及 `refreshTitle()`；恢复仅在 DWM 预览源变化时读取标题，并撤回 `WIN-TASKBAR-001` 的同 HWND 标签页检查句和本记录。保留此前任务栏同步、DWM 预览及其他 UI 修改，不重置工作区。
+
+## UI-025 — 在任务栏任务右侧接入紧凑系统托盘
+
+- **日期 / 目标：** 2026-10-16；按用户指定将 Windows 通知区域图标放到任务图标右侧，使用明显更小的图形与更窄间距。
+- **实现：** App 从现有 TrayIcons snapshot 组装 promoted 图标的 PNG 与稳定注册身份；`TaskbarPresentation` 仅持有通用绘图/命中值，不依赖 Tray Feature。任务组、托盘组和最右侧箭头共用单一布局快照；托盘图形 16 DIP、命中位 24 DIP、图标间隔 3 DIP，任务与托盘组间隔 10 DIP。任务 hover 展开会扣除托盘占用宽度；任务收回时托盘组与箭头使用同一 180 ms 过渡平滑补位。点击/右键以快照记录的 revision/index/fingerprint 校验后复用现有 TrayPress；非 promoted 项继续由箭头内托盘页访问。
+- **改动文件：** `island/src/features/taskbar/ui/Layout.zig`、`island/src/features/taskbar/ui/Page.zig`、`island/src/ui/TaskbarPresentation.zig`、`island/src/ui/Renderer.zig`、`island/src/app/main.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未修改 TrayIcons 注册枚举、托盘页菜单行为、TrayPress 发送方式、任务分组/窗口动作、安装器或架构文档状态；未新增或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt` 涉及的五个 Zig 文件退出码 0；普通沙箱首次构建无法定位 Zig 标准库，设置 `ZIG_LIB_DIR` 后因目录权限失败；获准访问本机 Zig 标准库与 Windows SDK 后，首次完整构建遇到标准库读取 `Unexpected`，立即重跑 `zig build --summary all` 退出码 0，16/16 steps（IslandBar、安装器和全部 smoke/probe）。架构守卫退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0，仅有 LF→CRLF 提示。未运行测试。
+- **Windows 实机：** `WIN-UI-001`、`WIN-TRAY-001` 增补托盘出现位置、16 DIP 图形/3 DIP 间距、左右键发送、未显示图标入口和注册变化观察；状态 `MANUAL_PENDING`，本轮未运行 GUI。
+- **风险 / 未验证：** inline 列表依据现有注册表 catalog 的 `promoted` 状态和 PNG snapshot，catalog 仍按现有 5 秒节奏刷新；真实 Explorer 注册变更时延、各种应用图标透明度、跨 DPI 命中和左右键处理需实机验收。托盘图标绘图失败不应中断整帧绘制。
+- **回退方式：** 从 `TaskbarPresentation` 删除 tray dock 图标值及 bounds，恢复 `TaskbarPage` 无托盘的 dock builder 与原任务/箭头间隔；撤销 Renderer inline PNG 绘制、main 侧 catalog 组装和 tray mouse routing；撤回 `WIN-UI-001`/`WIN-TRAY-001` 对顶栏 inline tray 的验收及本记录。保留现有托盘页、原生 TrayPress、UI-017 到 UI-024 的已有工作和工作区其他更改，不重置工作区。
+
+## UI-024 — 全屏缩放同步与帧节奏优化
+
+- **日期 / 目标：** 2026-10-16；改善透明小圆收缩/展开时的掉帧观感，并让中心岛体与四周开始、任务、箭头和岛内内容同步向中心缩放。
+- **原因：** 旧变形把周边内容缩放限制在前 180 ms，中心岛体则前半段停在原尺寸/胶囊形状、后半段才缩成小圆；fullscreen morph 也没有像普通 Motion 动画一样等待合成器节拍。
+- **实现：** 捕获最后成功呈现的岛体形状作为稳定起点，在完整 360 ms 内让岛体直接线性变形至中心圆，同时周边控件与内容按同一进度缩小和淡出；反向展开复用同一组几何和进度。变形期间暂停底层 Motion 几何推进，避免源布局漂移；暂停的普通动画不再单独触发持续重绘。全屏变形轮询提高到 8 ms，并在变形帧后等待一次 DirectComposition 时钟；变形表面阴影由六层绘制简化为单层低强度阴影，减少逐帧绘制操作。
+- **改动文件：** `island/src/app/main.zig`、`island/src/core/Motion.zig`、`island/src/ui/Renderer.zig`、`island/src/ui/TextRenderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 保留 360 ms 总时长、34 DIP 半透明圆、通知铃铛、窗口检测稳定器和过渡期间输入穿透；未改普通窗口状态动画、任务栏业务或安装器。未添加或运行测试。
+- **自动验证：** Zig `0.17.0`。`zig fmt --check src/app/main.zig src/core/Motion.zig src/ui/Renderer.zig src/ui/TextRenderer.zig` 退出码 0；`zig build --summary all --cache-dir .zig-cache-fullscreen-motion-sync` 最终退出码 0，16/16 steps（IslandBar、安装器、全部 smoke/probe）；依赖守卫退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0。未运行测试。首轮完整构建发现 TextRenderer 的未使用 receiver 参数，已修复后重跑成功。
+- **Windows 实机：** `WIN-WINDOW-001` 已更新为验证中心岛体与周边部件同步缩放、整段无明显掉帧及反向展开；状态 `MANUAL_PENDING`，本轮没有真实桌面视觉/帧率实测。
+- **风险 / 未验证：** 8 ms 定时器受 Windows 调度和显示器刷新率影响；DirectComposition 等待 API 在系统不可用或超时时会退回普通绘制节奏。实际帧连续性、不同刷新率和变形起止主观连贯性仍需实测。
+- **回退方式：** 恢复 UI-022 的 source→resting→circle 两段盒体变形及仅前半段的周边缩放；移除稳定源盒、Motion 暂停、8 ms fullscreen poll 和 morph compositor wait；恢复六层 soft shadow，并撤回 `WIN-WINDOW-001` 同步缩放验收句和本记录。保留此前全屏检测、圆形尺寸/透明度及其它 UI 改动，不重置工作区。

@@ -213,11 +213,42 @@ fn wideAsciiEqlIgnoreCase(actual: []const u16, expected: []const u8) bool {
     return true;
 }
 
+pub const FullscreenProbe = struct {
+    pub const Reason = enum {
+        no_foreground,
+        own_process,
+        hidden,
+        minimized,
+        excluded_shell_class,
+        cloaked,
+        rect_unavailable,
+        does_not_cover_monitor,
+        maximized_work_area,
+        fullscreen,
+    };
+
+    detected: bool = false,
+    hwnd: usize = 0,
+    process_id: DWORD = 0,
+    class_name: [64]u8 = @splat(0),
+    class_name_len: usize = 0,
+    window_rect: Rect = .{},
+    visible: bool = false,
+    minimized: bool = false,
+    zoomed: bool = false,
+    reason: Reason = .no_foreground,
+};
+
+fn readWindowClassName(window: HWND, output: *[64]u16) usize {
+    const count = GetClassNameW(window, output, @intCast(output.len));
+    return if (count > 0) @intCast(count) else 0;
+}
+
 fn windowClassIsExcluded(window: HWND) bool {
     var class_name: [64]u16 = @splat(0);
-    const count = GetClassNameW(window, &class_name, class_name.len);
-    if (count <= 0) return false;
-    const class = class_name[0..@intCast(count)];
+    const count = readWindowClassName(window, &class_name);
+    if (count == 0) return false;
+    const class = class_name[0..count];
     return wideAsciiEqlIgnoreCase(class, "Progman") or
         wideAsciiEqlIgnoreCase(class, "WorkerW") or
         wideAsciiEqlIgnoreCase(class, "Shell_TrayWnd") or
@@ -229,23 +260,66 @@ fn isCloaked(window: HWND) bool {
     return DwmGetWindowAttribute(window, dwm_attribute_cloaked, &cloaked, @sizeOf(i32)) >= 0 and cloaked != 0;
 }
 
-pub fn fullScreenAppInFront(monitor: Rect) bool {
-    const foreground = GetForegroundWindow() orelse return false;
-    var process_id: DWORD = 0;
-    _ = GetWindowThreadProcessId(foreground, &process_id);
-    if (process_id == GetCurrentProcessId()) return false;
-    if (IsWindowVisible(foreground) == 0 or IsIconic(foreground) != 0) return false;
-    if (windowClassIsExcluded(foreground) or isCloaked(foreground)) return false;
+pub fn probeFullScreenApp(monitor: Rect) FullscreenProbe {
+    var probe = FullscreenProbe{};
+    const foreground = GetForegroundWindow() orelse return probe;
+    probe.hwnd = @intFromPtr(foreground);
+    _ = GetWindowThreadProcessId(foreground, &probe.process_id);
+    var wide_class: [64]u16 = @splat(0);
+    probe.class_name_len = readWindowClassName(foreground, &wide_class);
+    for (wide_class[0..probe.class_name_len], 0..) |char, index| {
+        probe.class_name[index] = if (char <= 0x7f) @intCast(char) else '?';
+    }
+    probe.visible = IsWindowVisible(foreground) != 0;
+    probe.minimized = IsIconic(foreground) != 0;
+    probe.zoomed = IsZoomed(foreground) != 0;
 
-    var window_rect: Rect = .{};
-    if (GetWindowRect(foreground, &window_rect) == 0 or !windowCoversMonitor(window_rect, monitor)) return false;
-    if (IsZoomed(foreground) != 0) {
+    if (probe.process_id == GetCurrentProcessId()) {
+        probe.reason = .own_process;
+        return probe;
+    }
+    if (!probe.visible) {
+        probe.reason = .hidden;
+        return probe;
+    }
+    if (probe.minimized) {
+        probe.reason = .minimized;
+        return probe;
+    }
+    if (windowClassIsExcluded(foreground)) {
+        probe.reason = .excluded_shell_class;
+        return probe;
+    }
+    if (isCloaked(foreground)) {
+        probe.reason = .cloaked;
+        return probe;
+    }
+
+    if (GetWindowRect(foreground, &probe.window_rect) == 0) {
+        probe.reason = .rect_unavailable;
+        return probe;
+    }
+    if (!windowCoversMonitor(probe.window_rect, monitor)) {
+        probe.reason = .does_not_cover_monitor;
+        return probe;
+    }
+    if (probe.zoomed) {
         const owner = MonitorFromRect(&monitor, monitor_default_to_nearest);
         var info: MonitorInfo = .{ .size = @sizeOf(MonitorInfo), .monitor = .{}, .work = .{}, .flags = 0 };
         if (GetMonitorInfoW(owner, &info) != 0 and
-            looksLikeWindowsMaximizedRect(window_rect, info.work, queryDpi(owner))) return false;
+            looksLikeWindowsMaximizedRect(probe.window_rect, info.work, queryDpi(owner)))
+        {
+            probe.reason = .maximized_work_area;
+            return probe;
+        }
     }
-    return true;
+    probe.detected = true;
+    probe.reason = .fullscreen;
+    return probe;
+}
+
+pub fn fullScreenAppInFront(monitor: Rect) bool {
+    return probeFullScreenApp(monitor).detected;
 }
 
 pub fn shellTopBandThicknessPx(monitor: HMONITOR) i32 {

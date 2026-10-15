@@ -21,6 +21,7 @@ pub const expanded_width_dip: f32 = 520.0;
 pub const expanded_height_dip: f32 = 280.0;
 pub const notice_strip_width_dip: f32 = 420.0;
 pub const notice_strip_height_dip: f32 = collapsed_height_dip;
+pub const fullscreen_circle_diameter_dip: f32 = 34.0;
 pub const card_radius_dip: f32 = 20.0;
 
 pub const SizeF = struct {
@@ -128,6 +129,27 @@ pub fn boxForState(state: IslandState, anchor: IslandAnchor) Geometry.RoundedBox
         .radius_x = size.radius,
         .radius_y = size.radius,
     };
+}
+
+pub fn fullscreenCircleBox(anchor: IslandAnchor) Geometry.RoundedBox {
+    const diameter = fullscreen_circle_diameter_dip;
+    const left = anchor.center_x - diameter * 0.5;
+    const top = anchor.top_y + (collapsed_height_dip - diameter) * 0.5;
+    return .{
+        .rect = .{ .left = left, .top = top, .right = left + diameter, .bottom = top + diameter },
+        .radius_x = diameter * 0.5,
+        .radius_y = diameter * 0.5,
+    };
+}
+
+pub fn fullscreenMorphBox(source: Geometry.RoundedBox, resting: Geometry.RoundedBox, progress: f32) Geometry.RoundedBox {
+    const p = clamp01(progress);
+    const circle_anchor = IslandAnchor{
+        .center_x = (resting.rect.left + resting.rect.right) * 0.5,
+        .top_y = resting.rect.top,
+    };
+    const target = fullscreenCircleBox(circle_anchor);
+    return lerpBox(source, target, p);
 }
 
 pub fn placedCardFor(resting_pill: Geometry.RoundedBox, card_left_dip: f32) Geometry.RoundedBox {

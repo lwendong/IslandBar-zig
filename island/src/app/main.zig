@@ -879,6 +879,18 @@ const TaskHoverMotion = struct {
     velocity: f32 = 0,
 };
 
+const TaskIconTransitionKind = enum { appear, move, disappear };
+const TaskIconTransition = struct {
+    window_id: TaskbarCatalog.WindowId = 0,
+    started_ms: u64 = 0,
+    kind: TaskIconTransitionKind = .appear,
+    from_offset_x: f32 = 0,
+    button: TextRenderer.TaskButton = .{},
+};
+
+const task_icon_transition_duration_ms: u64 = 180;
+const max_task_icon_transitions: usize = TaskbarLayout.max_task_icons * 2;
+
 const PaintContext = struct {
     renderer: *Renderer.DeviceResources,
     renderer_generation: u64 = 0,
@@ -899,6 +911,12 @@ const PaintContext = struct {
     taskbar_state: TaskbarController.State = .{},
     task_hover_motions: [TaskbarLayout.max_task_icons]TaskHoverMotion = @splat(.{}),
     task_hover_leave_deadline_ms: u64 = 0,
+    task_icon_transitions: [max_task_icon_transitions]TaskIconTransition = @splat(.{}),
+    task_icon_transition_count: usize = 0,
+    task_icon_transition_revision: ?u64 = null,
+    task_icon_transition_deadline_ms: u64 = 0,
+    tray_dock_shift_started_ms: u64 = 0,
+    tray_dock_shift_from_x: f32 = 0,
     candidate_taskbar_snapshot: TaskbarCatalog.Snapshot = .{},
     candidate_taskbar_view: TaskbarPage.View = .{},
     presented_taskbar_view: TaskbarPage.View = .{},
@@ -922,8 +940,15 @@ const PaintContext = struct {
     app_bar_reclaim: bool = false,
     bar_thickness_px: i32 = 0,
     fullscreen_app: bool = false,
+    fullscreen_candidate: ?bool = null,
+    fullscreen_candidate_samples: u8 = 0,
     fullscreen_last_poll_ms: u64 = 0,
     fullscreen_disabled: bool = false,
+    fullscreen_morph_progress: f32 = 0,
+    fullscreen_morph_from: f32 = 0,
+    fullscreen_morph_target: f32 = 0,
+    fullscreen_morph_started_ms: u64 = 0,
+    fullscreen_morph_source_box: Geometry.RoundedBox = .{ .rect = .{} },
     last_weather_revision: u64 = 0,
     music_wave_phase: f32 = 0,
     music_wave_accent: MediaService.ArtworkAccent = .{},
@@ -1023,6 +1048,8 @@ const animation_poll_ms: u32 = 16;
 const task_hover_poll_ms: u32 = 10;
 const task_hover_idle_poll_ms: u32 = 24;
 const task_window_refresh_fallback_ms: u64 = 500;
+const fullscreen_morph_duration_ms: u64 = 360;
+const fullscreen_morph_poll_ms: u32 = 8;
 const task_hover_expand_omega: f32 = 20;
 const task_hover_retract_omega: f32 = 16;
 const task_hover_spring_damping: f32 = 1;
@@ -1130,6 +1157,185 @@ fn syncTaskbarSnapshot(context: *PaintContext) bool {
     return context.taskbar_state.updateSnapshot(context.candidate_taskbar_snapshot);
 }
 
+fn visibleTaskButton(view: *const TaskbarPage.View, window_id: TaskbarCatalog.WindowId) ?TextRenderer.TaskButton {
+    if (window_id == 0) return null;
+    for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
+        if (button.window_id == window_id) return button;
+    }
+    if (view.overflow_open) {
+        for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
+            if (button.window_id == window_id) return button;
+        }
+    }
+    return null;
+}
+
+fn taskButtonInLayout(view: *const TaskbarPage.View, window_id: TaskbarCatalog.WindowId) bool {
+    if (window_id == 0) return false;
+    for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
+        if (button.window_id == window_id) return true;
+    }
+    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
+        if (button.window_id == window_id) return true;
+    }
+    return false;
+}
+
+fn addTaskIconTransition(context: *PaintContext, transition: TaskIconTransition) void {
+    if (context.task_icon_transition_count >= context.task_icon_transitions.len) return;
+    context.task_icon_transitions[context.task_icon_transition_count] = transition;
+    context.task_icon_transition_count += 1;
+}
+
+fn setTaskButtonVisual(button: *TextRenderer.TaskButton, opacity: f32, scale: f32, offset_y: f32) void {
+    button.visual_opacity = std.math.clamp(opacity, 0, 1);
+    button.visual_scale = @max(0, scale);
+    button.visual_offset_y = offset_y;
+}
+
+fn applyTaskButtonVisual(view: *TaskbarPage.View, window_id: TaskbarCatalog.WindowId, opacity: f32, scale: f32, offset_y: f32) bool {
+    for (view.buttons[0..@min(view.count, view.buttons.len)]) |*button| {
+        if (button.window_id != window_id) continue;
+        setTaskButtonVisual(button, opacity, scale, offset_y);
+        return true;
+    }
+    for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |*button| {
+        if (button.window_id != window_id) continue;
+        setTaskButtonVisual(button, opacity, scale, offset_y);
+        return true;
+    }
+    return false;
+}
+
+fn smoothTaskTransition(value: f32) f32 {
+    const t = std.math.clamp(value, 0, 1);
+    return t * t * (3 - 2 * t);
+}
+
+fn easeOutTaskMovement(value: f32) f32 {
+    const remaining = 1 - std.math.clamp(value, 0, 1);
+    return 1 - remaining * remaining * remaining;
+}
+
+fn prepareTaskIconTransitions(context: *PaintContext, view: *TaskbarPage.View, now: u64) void {
+    if (context.task_icon_transition_revision == null or context.task_icon_transition_revision.? != view.catalog_revision) {
+        context.task_icon_transition_count = 0;
+        const previous = &context.presented_taskbar_view;
+        context.tray_dock_shift_started_ms = 0;
+        context.tray_dock_shift_from_x = 0;
+        if (view.count < previous.count and view.tray_count > 0 and previous.tray_count > 0) {
+            const old_tray = previous.tray_icons[0];
+            const new_tray = view.tray_icons[0];
+            if (old_tray.source_index == new_tray.source_index and old_tray.fingerprint == new_tray.fingerprint) {
+                const offset_x = old_tray.bounds.left - new_tray.bounds.left;
+                if (offset_x > 0.5) {
+                    context.tray_dock_shift_started_ms = now;
+                    context.tray_dock_shift_from_x = offset_x;
+                }
+            }
+        }
+        for (previous.buttons[0..@min(previous.count, previous.buttons.len)]) |button| {
+            if (taskButtonInLayout(view, button.window_id)) continue;
+            var fading = button;
+            fading.title = null;
+            fading.active = false;
+            fading.hover_progress = 0;
+            fading.visual_opacity = 1;
+            fading.visual_scale = 1;
+            fading.visual_offset_y = 0;
+            addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .disappear, .button = fading });
+        }
+        if (previous.overflow_open and view.overflow_open) {
+            for (previous.overflow_buttons[0..@min(previous.overflow_count, previous.overflow_buttons.len)]) |button| {
+                if (taskButtonInLayout(view, button.window_id)) continue;
+                var fading = button;
+                fading.title = null;
+                fading.active = false;
+                fading.hover_progress = 0;
+                fading.visual_opacity = 1;
+                fading.visual_scale = 1;
+                fading.visual_offset_y = 0;
+                addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .disappear, .button = fading });
+            }
+        }
+        for (view.buttons[0..@min(view.count, view.buttons.len)]) |button| {
+            if (visibleTaskButton(previous, button.window_id)) |old_button| {
+                if (@abs(old_button.bounds.top - button.bounds.top) < 2) {
+                    const offset_x = old_button.bounds.left - button.bounds.left;
+                    if (@abs(offset_x) > 0.5) addTaskIconTransition(context, .{
+                        .window_id = button.window_id,
+                        .started_ms = now,
+                        .kind = .move,
+                        .from_offset_x = offset_x,
+                    });
+                }
+            } else {
+                addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .appear });
+            }
+        }
+        if (view.overflow_open) {
+            for (view.overflow_buttons[0..@min(view.overflow_count, view.overflow_buttons.len)]) |button| {
+                if (visibleTaskButton(previous, button.window_id)) |old_button| {
+                    if (@abs(old_button.bounds.top - button.bounds.top) < 2) {
+                        const offset_x = old_button.bounds.left - button.bounds.left;
+                        if (@abs(offset_x) > 0.5) addTaskIconTransition(context, .{
+                            .window_id = button.window_id,
+                            .started_ms = now,
+                            .kind = .move,
+                            .from_offset_x = offset_x,
+                        });
+                    }
+                } else {
+                    addTaskIconTransition(context, .{ .window_id = button.window_id, .started_ms = now, .kind = .appear });
+                }
+            }
+        }
+        context.task_icon_transition_revision = view.catalog_revision;
+        context.task_icon_transition_deadline_ms = if (context.task_icon_transition_count > 0)
+            now + task_icon_transition_duration_ms
+        else
+            0;
+    }
+
+    view.exit_count = 0;
+    var active_count: usize = 0;
+    for (context.task_icon_transitions[0..context.task_icon_transition_count]) |transition| {
+        const elapsed = now -| transition.started_ms;
+        const progress = @min(1, @as(f32, @floatFromInt(elapsed)) / @as(f32, @floatFromInt(task_icon_transition_duration_ms)));
+        if (progress >= 1) continue;
+        const eased = smoothTaskTransition(progress);
+        switch (transition.kind) {
+            .appear => {
+                if (!applyTaskButtonVisual(view, transition.window_id, eased, 0.82 + 0.18 * eased, 4 * (1 - eased))) continue;
+            },
+            .move => {
+                const movement = easeOutTaskMovement(progress);
+                if (!TaskbarPage.applyHorizontalOffset(view, transition.window_id, transition.from_offset_x * (1 - movement))) continue;
+            },
+            .disappear => {
+                if (view.exit_count >= view.exit_buttons.len) continue;
+                var fading = transition.button;
+                setTaskButtonVisual(&fading, 1 - eased, 1 - 0.32 * eased, -4 * eased);
+                view.exit_buttons[view.exit_count] = fading;
+                view.exit_count += 1;
+            },
+        }
+        context.task_icon_transitions[active_count] = transition;
+        active_count += 1;
+    }
+    context.task_icon_transition_count = active_count;
+    if (active_count == 0) context.task_icon_transition_deadline_ms = 0;
+    if (context.tray_dock_shift_started_ms != 0) {
+        const elapsed = now -| context.tray_dock_shift_started_ms;
+        const progress = @min(1, @as(f32, @floatFromInt(elapsed)) / @as(f32, @floatFromInt(task_icon_transition_duration_ms)));
+        TaskbarPage.applyTrayDockOffset(view, context.tray_dock_shift_from_x * (1 - smoothTaskTransition(progress)));
+        if (progress >= 1) {
+            context.tray_dock_shift_started_ms = 0;
+            context.tray_dock_shift_from_x = 0;
+        }
+    }
+}
+
 fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     const opaque_context = context orelse {
         paintClock(window, null);
@@ -1190,7 +1396,7 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     pill.lyric_line_roll = Lyrics.lyricLineRollFor(paint_context.lyric_line_age_seconds);
     pill.lyric_line_prev = std.mem.sliceTo(&paint_context.replaced_lyric_text, 0);
     pill.lyric_line_prev_scroll_dip = paint_context.replaced_lyric_scroll_dip;
-    pill.fullscreen_app = paint_context.fullscreen_app;
+    pill.fullscreen_progress = paint_context.fullscreen_morph_progress;
     pill.status_weather = weather_view;
     if (active_notification) |notification| {
         pill.line_text_mode = .static;
@@ -1380,7 +1586,6 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     pill.deck_box = deck_island;
     const active_theme = Theme.currentTheme();
     pill.fill = .{ active_theme.pill_bottom.r, active_theme.pill_bottom.g, active_theme.pill_bottom.b, active_theme.pill_bottom.a };
-    if (paint_context.fullscreen_app and !notice_active) pill.opacity = 0;
     pill.start_hover = paint_context.start_button_wash;
     const panel_controls_lit = PresentationPolicy.controlLitFor(paint_context.presentation, outer_card_up);
     pill.start_open = panel_controls_lit.start;
@@ -1390,14 +1595,41 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     pill.tray_entry_hover = paint_context.tray_entry_wash;
     const task_island = deck_island;
     const monitor_width_dip = @as(f32, @floatFromInt(window_width_px)) / @max(paint_context.scale, 0.01);
-    paint_context.candidate_taskbar_view = TaskbarPage.buildDockViewWithHoverProgress(
+    var tray_dock_icons: [TaskbarPage.max_tray_icons]TaskbarPage.TrayIconInput = @splat(.{});
+    var tray_dock_icon_count: usize = 0;
+    var tray_dock_revision: u64 = 0;
+    if (paint_context.tray_icons) |icons| {
+        tray_dock_revision = icons.getRevision();
+        for (0..icons.count()) |index| {
+            if (tray_dock_icon_count >= tray_dock_icons.len) break;
+            const icon = icons.at(index) orelse continue;
+            // Windows marks icons that belong in the notification area as promoted;
+            // unpromoted icons remain available from the existing tray flyout.
+            if (!icon.promoted) continue;
+            const identity = TrayCatalog.identityFor(icon, tray_dock_revision, index);
+            tray_dock_icons[tray_dock_icon_count] = .{
+                .png = icon.png,
+                .source_index = identity.index,
+                .fingerprint = identity.fingerprint,
+            };
+            tray_dock_icon_count += 1;
+        }
+    }
+    paint_context.candidate_taskbar_view = TaskbarPage.buildDockViewWithHoverProgressAndTray(
         task_island,
         paint_context.task_buttons[0..task_count],
         paint_context.candidate_taskbar_snapshot.revision,
         TaskbarLayout.taskIconsThatFitForMonitor(monitor_width_dip, task_count),
         monitor_width_dip,
         paint_context.task_overflow_open,
+        tray_dock_icons[0..tray_dock_icon_count],
+        tray_dock_revision,
     );
+    prepareTaskIconTransitions(paint_context, &paint_context.candidate_taskbar_view, frame_started_ms);
+    if (paint_context.task_icon_transition_deadline_ms != 0) {
+        const morph_animating = @abs(paint_context.fullscreen_morph_progress - paint_context.fullscreen_morph_target) > 0.0001;
+        if (paint_context.window) |native_window| native_window.setPointerPollInterval(if (morph_animating) fullscreen_morph_poll_ms else animation_poll_ms);
+    }
     pill.taskbar_view = &paint_context.candidate_taskbar_view;
     paint_context.candidate_sound_layout = buildSoundLayoutSnapshot(paint_context, pill);
     paint_context.candidate_music_layout = buildMusicLayoutSnapshot(paint_context, pill);
@@ -1414,12 +1646,16 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
         &paint_context.candidate_launcher_layout.snapshot
     else
         null;
+    pill.fullscreen_source_box = paint_context.fullscreen_morph_source_box;
     if (paint_context.renderer.generation != paint_context.renderer_generation) {
         paint_context.text_renderer.invalidateDeviceResources();
         paint_context.renderer_generation = paint_context.renderer.generation;
     }
     if (!paint_context.renderer.isReady()) _ = recoverGraphicsDevice(paint_context, GetTickCount64());
     const rendered = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact);
+    if (rendered and !paint_context.fullscreen_app and paint_context.fullscreen_morph_progress <= 0.0001) {
+        paint_context.fullscreen_morph_source_box = pill.box;
+    }
     LayoutSnapshot.publishAfterSuccessfulFrame(&paint_context.presented_sound_layout, paint_context.candidate_sound_layout, rendered);
     LayoutSnapshot.publishAfterSuccessfulFrame(&paint_context.presented_music_layout, paint_context.candidate_music_layout, rendered);
     if (rendered) paint_context.presented_launcher_layout = paint_context.candidate_launcher_layout;
@@ -1428,7 +1664,11 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     if (!rendered and paint_context.renderer.lastFailureIsDeviceLoss()) _ = recoverGraphicsDevice(paint_context, GetTickCount64());
     _ = EndPaint(window, &paint);
     _ = updateInputRegion(paint_context);
-    if (paint_context.motion.isAnimating()) _ = paint_context.renderer.waitForCompositorClock(8);
+    if ((paint_context.motion.isAnimating() and !fullscreenPresentationActive(paint_context)) or
+        @abs(paint_context.fullscreen_morph_progress - paint_context.fullscreen_morph_target) > 0.0001)
+    {
+        _ = paint_context.renderer.waitForCompositorClock(8);
+    }
 }
 
 fn taskButtonCount(context: *const PaintContext) usize {
@@ -1589,6 +1829,19 @@ fn overflowButtonBoundsFor(context: *const PaintContext, island: Geometry.Rounde
 
 fn updateInputRegion(context: *PaintContext) bool {
     const window = context.window orelse return false;
+    if (context.fullscreen_app and context.fullscreen_morph_progress >= 0.999) {
+        const circle = Motion.fullscreenCircleBox(context.motion.anchor).rect;
+        const edge_padding = 2.0;
+        const region = IslandWindow.Rect{
+            .left = @intFromFloat(@floor((circle.left - edge_padding) * context.scale)),
+            .top = @intFromFloat(@floor((circle.top - edge_padding) * context.scale)),
+            .right = @intFromFloat(@ceil((circle.right + edge_padding) * context.scale)),
+            .bottom = @intFromFloat(@ceil((circle.bottom + edge_padding) * context.scale)),
+        };
+        const ok = window.setInputRegion(region);
+        if (!ok) Log.logLine("fullscreen circle input region could not be updated");
+        return ok;
+    }
     const card_up = (context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded) and context.presentation.card_owner != .none;
     const card = switch (context.presentation.card_owner) {
         .notification => notificationCardBox(context),
@@ -2047,6 +2300,10 @@ fn startTrayPressIdentity(context: *PaintContext, identity: TrayCatalog.Identity
     }
 }
 
+fn trayDockIdentity(icon: TaskbarPage.TrayDockIcon) TrayCatalog.Identity {
+    return .{ .revision = icon.revision, .index = icon.source_index, .fingerprint = icon.fingerprint };
+}
+
 fn closeTrayMenu(context: *PaintContext) void {
     TrayController.closeMenu(&context.tray_state);
 }
@@ -2398,16 +2655,15 @@ fn pointToLocalDip(point: IslandWindow.Point, context: *const PaintContext) [2]f
     };
 }
 
+fn fullscreenPresentationActive(context: *const PaintContext) bool {
+    return context.fullscreen_app or context.fullscreen_morph_progress > 0.001;
+}
+
 fn nativeHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callconv(.winapi) bool {
     const raw = raw_context orelse return false;
     const context: *PaintContext = @ptrCast(@alignCast(raw));
+    if (fullscreenPresentationActive(context)) return false;
     const local = pointToLocalDip(point, context);
-    if (context.fullscreen_app) {
-        if (context.motion.target() == .full_bar) return false;
-        const resting = Motion.boxForState(.collapsed, context.motion.anchor);
-        const current = Motion.boxForState(context.motion.target(), context.motion.anchor);
-        return pointInBox(resting, local[0], local[1]) or pointInBox(current, local[0], local[1]);
-    }
     const notification_active = hasActiveNotification(context, GetTickCount64());
     if (notification_active) {
         const strip = Motion.boxForState(.notice_strip, context.motion.anchor);
@@ -2438,6 +2694,7 @@ fn nativeHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callconv(.
 fn nativeWheelHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callconv(.winapi) bool {
     const raw = raw_context orelse return false;
     const context: *PaintContext = @ptrCast(@alignCast(raw));
+    if (fullscreenPresentationActive(context)) return false;
     if (context.motion.target() != .expanded or hasActiveNotification(context, GetTickCount64())) return false;
     if (!context.sound_page_open and !(context.start_page_open and context.launcher_state.page == .apps)) return false;
     const local = pointToLocalDip(point, context);
@@ -2447,7 +2704,7 @@ fn nativeWheelHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callc
 fn nativeCursorHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callconv(.winapi) bool {
     const raw = raw_context orelse return false;
     const context: *PaintContext = @ptrCast(@alignCast(raw));
-    if (context.fullscreen_app) return false;
+    if (fullscreenPresentationActive(context)) return false;
     const local = pointToLocalDip(point, context);
     const notification_active = hasActiveNotification(context, GetTickCount64());
     const resting = Motion.boxForState(.collapsed, context.motion.anchor);
@@ -2461,6 +2718,7 @@ fn nativeCursorHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) call
         TaskbarPage.trayEntryHit(&context.presented_taskbar_view, local[0], local[1])) return true;
 
     if (TaskbarPage.actionAt(&context.presented_taskbar_view, local[0], local[1]) != null) return true;
+    if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, local[0], local[1]) != null) return true;
 
     const outer_card_up = context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded;
     if (!outer_card_up) return false;
@@ -2611,7 +2869,8 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
     const elapsed_ms = if (context.last_tick_ms == 0) 0 else now -| context.last_tick_ms;
     context.last_tick_ms = now;
     const dt = @as(f32, @floatFromInt(@min(elapsed_ms, 100))) / 1000;
-    const changed_by_motion = context.motion.tick(dt);
+    const fullscreen_morph_active = context.fullscreen_morph_progress > 0.0001 or context.fullscreen_morph_target > 0.0001;
+    const changed_by_motion = if (fullscreen_morph_active) false else context.motion.tick(dt);
     var hover_animation_active = false;
     var task_hover_animation_active = false;
     var local_time: SystemTime = undefined;
@@ -2620,20 +2879,75 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
     context.last_clock_second = local_time.second;
     if (context.fullscreen_last_poll_ms == 0 or now -| context.fullscreen_last_poll_ms >= 250) {
         context.fullscreen_last_poll_ms = now;
-        const measured = !context.fullscreen_disabled and Monitor.fullScreenAppInFront(context.monitor_bounds);
-        if (measured != context.fullscreen_app) {
-            context.fullscreen_app = measured;
-            logFormatted("fullscreen: {s}", .{if (measured) "full-screen app in front" else "normal desktop restored"});
-            if (context.app_bar) |bar| {
-                if (measured and bar.registered) {
-                    bar.release();
-                } else if (!measured and context.app_bar_reclaim and !bar.registered and context.bar_thickness_px > 0) {
-                    _ = bar.claim(window.handle(), .top, context.bar_thickness_px);
-                }
+        const probe = if (context.fullscreen_disabled)
+            Monitor.FullscreenProbe{}
+        else
+            Monitor.probeFullScreenApp(context.monitor_bounds);
+        const measured = probe.detected;
+        if (measured == context.fullscreen_app) {
+            context.fullscreen_candidate = null;
+            context.fullscreen_candidate_samples = 0;
+        } else {
+            const candidate_matches = if (context.fullscreen_candidate) |candidate| candidate == measured else false;
+            if (!candidate_matches) {
+                context.fullscreen_candidate = measured;
+                context.fullscreen_candidate_samples = 1;
+                logFormatted(
+                    "fullscreen probe: candidate={s}, hwnd=0x{x}, pid={d}, class='{s}', rect=({d},{d})-({d},{d}), visible={d}, minimized={d}, zoomed={d}, reason={s}",
+                    .{
+                        if (measured) "fullscreen" else "normal",
+                        probe.hwnd,
+                        probe.process_id,
+                        probe.class_name[0..probe.class_name_len],
+                        probe.window_rect.left,
+                        probe.window_rect.top,
+                        probe.window_rect.right,
+                        probe.window_rect.bottom,
+                        @intFromBool(probe.visible),
+                        @intFromBool(probe.minimized),
+                        @intFromBool(probe.zoomed),
+                        @tagName(probe.reason),
+                    },
+                );
+            } else {
+                context.fullscreen_candidate_samples = @min(context.fullscreen_candidate_samples +| 1, 2);
             }
-            window.invalidate();
+            if (context.fullscreen_candidate_samples >= 2) {
+                context.fullscreen_app = measured;
+                context.fullscreen_candidate = null;
+                context.fullscreen_candidate_samples = 0;
+                context.fullscreen_morph_from = context.fullscreen_morph_progress;
+                context.fullscreen_morph_target = if (measured) 1 else 0;
+                context.fullscreen_morph_started_ms = now;
+                logFormatted("fullscreen: state stabilized as {s}", .{if (measured) "fullscreen" else "normal"});
+                if (context.app_bar) |bar| {
+                    if (measured and bar.registered) {
+                        bar.release();
+                    } else if (!measured and context.app_bar_reclaim and !bar.registered and context.bar_thickness_px > 0) {
+                        _ = bar.claim(window.handle(), .top, context.bar_thickness_px);
+                    }
+                }
+                if (measured) {
+                    if (context.input_router.capturedIndex() != null) _ = context.input_router.route(.cancel, &context.presented_sound_layout);
+                    context.pending_press_point = null;
+                    context.pending_press_action_handled = false;
+                }
+                window.invalidate();
+            }
         }
     }
+    const previous_fullscreen_morph = context.fullscreen_morph_progress;
+    const fullscreen_morph_elapsed_ms = now -| context.fullscreen_morph_started_ms;
+    const fullscreen_morph_time = std.math.clamp(
+        @as(f32, @floatFromInt(fullscreen_morph_elapsed_ms)) / @as(f32, @floatFromInt(fullscreen_morph_duration_ms)),
+        0,
+        1,
+    );
+    context.fullscreen_morph_progress = context.fullscreen_morph_from +
+        (context.fullscreen_morph_target - context.fullscreen_morph_from) * fullscreen_morph_time;
+    if (fullscreen_morph_time >= 1) context.fullscreen_morph_progress = context.fullscreen_morph_target;
+    const fullscreen_morph_animating = fullscreen_morph_time < 1 and context.fullscreen_morph_from != context.fullscreen_morph_target;
+    if (@abs(context.fullscreen_morph_progress - previous_fullscreen_morph) > 0.0001) window.invalidate();
     var task_refresh_changed = syncTaskbarSnapshot(context);
     if (context.task_last_refresh_ms == 0 or now -| context.task_last_refresh_ms >= task_window_refresh_fallback_ms) {
         context.task_last_refresh_ms = now;
@@ -2854,9 +3168,7 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         context.music_meter_redraw_ms = now;
         window.invalidate();
     }
-    if (context.fullscreen_app) {
-        _ = context.motion.setTarget(if (hasActiveNotification(context, now)) .notice_strip else .full_bar);
-    } else if (context.motion.target() == .full_bar) {
+    if (!context.fullscreen_app and context.motion.target() == .full_bar) {
         _ = context.motion.setTarget(if (context.music_state.active_present) .music_strip else .collapsed);
     }
     buildMusicCardText(context);
@@ -2876,14 +3188,17 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
     }
 
     var pointer: IslandWindow.Point = undefined;
-    const have_pointer = window.pointerPosition(&pointer);
+    const have_pointer = !fullscreenPresentationActive(context) and window.pointerPosition(&pointer);
     var pointer_on_task_row = false;
     var right_click_point: IslandWindow.Point = undefined;
     while (window.takeRightClick(&right_click_point)) {
+        if (fullscreenPresentationActive(context)) continue;
         const local_right = pointToLocalDip(right_click_point, context);
         const notification_active = hasActiveNotification(context, now);
         const card = systemPanelCardBox(context);
-        if (!notification_active and context.start_page_open and context.motion.target() == .expanded and context.launcher_state.page == .pins) {
+        if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, local_right[0], local_right[1])) |dock_icon| {
+            startTrayPressIdentity(context, trayDockIdentity(dock_icon), true);
+        } else if (!notification_active and context.start_page_open and context.motion.target() == .expanded and context.launcher_state.page == .pins) {
             const hit = LauncherPage.actionAt(&context.presented_launcher_layout, local_right[0], local_right[1]);
             const pin: i32 = if (hit) |action| switch (action) {
                 .launch_pinned => |request| @intCast(request.index),
@@ -2916,7 +3231,7 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         }
     }
     var pressed_point: IslandWindow.Point = undefined;
-    if (window.takePress(&pressed_point)) {
+    if (window.takePress(&pressed_point) and !fullscreenPresentationActive(context)) {
         context.pending_press_point = pressed_point;
         context.pending_press_action_handled = false;
         if (context.sound_page_open and context.motion.target() == .expanded and !hasActiveNotification(context, now)) {
@@ -3039,7 +3354,7 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         if (button_wash_changed or task_hover_animating or task_hover_visual_changed) window.invalidate();
         task_hover_animation_active = task_hover_animating or task_hover_visual_changed or context.task_hover_leave_deadline_ms != 0;
         hover_animation_active = button_wash_changed or task_hover_animation_active;
-        if (window.takeClick()) {
+        if (window.takeClick() and !fullscreenPresentationActive(context)) {
             const press = context.pending_press_point orelse pointer;
             const released_action = context.input_router.route(.release, &context.presented_sound_layout);
             dispatchInputAction(context, released_action);
@@ -3050,6 +3365,8 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             if (context.tray_state.menu_open) {
                 handleTrayMenuClick(context, pressed_local[0], pressed_local[1]);
                 window.invalidate();
+            } else if (TaskbarPage.trayIconAt(&context.presented_taskbar_view, pressed_local[0], pressed_local[1])) |dock_icon| {
+                startTrayPressIdentity(context, trayDockIdentity(dock_icon), false);
             } else if (hasActiveNotification(context, now)) {
                 if (context.notifications) |store| {
                     const call_id = callNotificationId(context);
@@ -3280,20 +3597,22 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             }
         }
 
-        if (context.motion.target() == .expanded) {
-            const current = if (notification_active) notificationCardBox(context) else if (musicCardActive(context)) context.motion.current() else systemPanelCardBox(context);
-            const in_current = pointInBox(current, local[0], local[1]);
-            if (!context.system_panel_pinned and !on_pill and !on_task_row and !in_current) _ = context.motion.setTarget(resting_state);
-        } else if (context.motion.target() == .collapsed and on_pill) {
-            _ = context.motion.setTarget(.hover);
-        } else if (context.motion.target() == .music_strip and on_pill) {
-            _ = context.motion.setTarget(.expanded);
-        } else if (context.motion.target() == .hover and !on_pill) {
-            _ = context.motion.setTarget(resting_state);
-        } else if (context.motion.target() == .notice_strip and
-            (context.notifications == null or context.notifications.?.activeDisplay(now) == null))
-        {
-            _ = context.motion.setTarget(if (on_pill) .hover else .collapsed);
+        if (!fullscreenPresentationActive(context)) {
+            if (context.motion.target() == .expanded) {
+                const current = if (notification_active) notificationCardBox(context) else if (musicCardActive(context)) context.motion.current() else systemPanelCardBox(context);
+                const in_current = pointInBox(current, local[0], local[1]);
+                if (!context.system_panel_pinned and !on_pill and !on_task_row and !in_current) _ = context.motion.setTarget(resting_state);
+            } else if (context.motion.target() == .collapsed and on_pill) {
+                _ = context.motion.setTarget(.hover);
+            } else if (context.motion.target() == .music_strip and on_pill) {
+                _ = context.motion.setTarget(.expanded);
+            } else if (context.motion.target() == .hover and !on_pill) {
+                _ = context.motion.setTarget(resting_state);
+            } else if (context.motion.target() == .notice_strip and
+                (context.notifications == null or context.notifications.?.activeDisplay(now) == null))
+            {
+                _ = context.motion.setTarget(if (on_pill) .hover else .collapsed);
+            }
         }
     }
 
@@ -3304,19 +3623,25 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
     if (context.forced_state) |forced| {
         if (context.motion.target() != forced) _ = context.motion.setTarget(forced);
     }
-    const shape_animating = context.motion.isAnimating();
+    const task_icon_transition_pending = context.task_icon_transition_deadline_ms != 0;
+    const task_icon_transition_animating = task_icon_transition_pending and now < context.task_icon_transition_deadline_ms;
+    if (task_icon_transition_pending and !task_icon_transition_animating) context.task_icon_transition_deadline_ms = 0;
+    const shape_animating = (context.motion.isAnimating() and !fullscreenPresentationActive(context)) or fullscreen_morph_animating;
     const lyric_roll_animating = context.music_state.active_present and context.lyric_line_age_seconds < Lyrics.line_enter_seconds;
     const active_music_meter = context.music_state.active_playing and activeNotification(context, now) == null;
-    const poll_ms = pointerPollIntervalFor(
-        shape_animating or lyric_scroll_animating or lyric_roll_animating or hover_animation_active,
-        task_hover_animation_active,
-        pointer_on_task_row,
-        callNotificationId(context) != 0,
-        active_music_meter,
-    );
+    const poll_ms = if (fullscreen_morph_animating)
+        fullscreen_morph_poll_ms
+    else
+        pointerPollIntervalFor(
+            shape_animating or lyric_scroll_animating or lyric_roll_animating or hover_animation_active or task_icon_transition_animating,
+            task_hover_animation_active,
+            pointer_on_task_row,
+            callNotificationId(context) != 0,
+            active_music_meter,
+        );
     window.setPointerPollInterval(poll_ms);
     _ = updateInputRegion(context);
-    if (system_status_refreshed or task_refresh_changed or changed_by_motion or shape_animating or lyric_line_changed or lyric_scroll_animating or lyric_roll_animating or clock_changed) window.invalidate();
+    if (system_status_refreshed or task_refresh_changed or changed_by_motion or shape_animating or fullscreen_morph_animating or lyric_line_changed or lyric_scroll_animating or lyric_roll_animating or clock_changed or task_icon_transition_pending) window.invalidate();
 }
 
 fn refreshDisplayGeometry(raw_context: ?*anyopaque) callconv(.winapi) void {

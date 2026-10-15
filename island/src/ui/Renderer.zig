@@ -50,6 +50,7 @@ const SwapChainDesc1 = extern struct {
     flags: UINT,
 };
 const Matrix3x2 = extern struct { m11: f32, m12: f32, m21: f32, m22: f32, m31: f32, m32: f32 };
+const D2DMatrix3x2 = extern struct { m11: f32, m12: f32, m21: f32, m22: f32, dx: f32, dy: f32 };
 const PixelFormat = extern struct { format: i32, alpha_mode: i32 };
 const BitmapProperties1 = extern struct {
     pixel_format: PixelFormat,
@@ -318,7 +319,8 @@ pub const PillAppearance = struct {
     line_text_mode: enum { scrolling, static } = .scrolling,
     call_up: bool = false,
     call_strip: TextRenderer.CallStripText = .{},
-    fullscreen_app: bool = false,
+    fullscreen_progress: f32 = 0,
+    fullscreen_source_box: ?Geometry.RoundedBox = null,
     resting_state: Motion.IslandState = .collapsed,
     music_present: bool = false,
     music_card_open: bool = false,
@@ -344,7 +346,6 @@ pub const FrameState = struct {
     pill: PillAppearance = .{},
     resting_pill: Geometry.RoundedBox = .{ .rect = .{} },
     outer_card_up: bool = false,
-    fullscreen_app: bool = false,
     state: Motion.IslandState = .collapsed,
     resting_state: Motion.IslandState = .collapsed,
     clock: TextRenderer.ClockStyle = .compact,
@@ -371,12 +372,6 @@ pub const FrameState = struct {
     background_height: i32 = 0,
     artwork_revision: u64 = 0,
     background_revision: u64 = 0,
-    task_buttons: [max_task_buttons]TextRenderer.TaskButton = @splat(.{}),
-    task_button_count: usize = 0,
-    task_button_appear: [max_task_buttons]f32 = @splat(0),
-    task_button_appear_valid: bool = false,
-    task_hovered_index: i32 = -1,
-    task_button_windows: [max_task_buttons]?*anyopaque = @splat(null),
     start_wash: f32 = 0,
     start_button_open: bool = false,
     system_panel_open: bool = false,
@@ -590,6 +585,12 @@ pub const DeviceResources = struct {
         last_render_pill_failure = "";
         last_render_pill_hresult = 0;
         if (!self.isReady() or !self.visual_bound) return false;
+        const fullscreen_progress = std.math.clamp(pill.fullscreen_progress, 0, 1);
+        const fullscreen_parts_progress = 1 - fullscreen_progress;
+        const fullscreen_core_progress = std.math.clamp((fullscreen_progress - 0.5) * 2, 0, 1);
+        const content_opacity = std.math.clamp(pill.opacity * fullscreen_parts_progress, 0, 1);
+        const core_fill_opacity = pill.opacity * (1 - fullscreen_core_progress * 0.58);
+        const core_shadow_opacity = pill.opacity * (1 - fullscreen_core_progress);
 
         var surface: Handle = null;
         const get_buffer = comMethod(*const fn (*anyopaque, UINT, *const Guid, *Handle) callconv(.winapi) HResult, self.swap_chain.?, 9);
@@ -639,7 +640,8 @@ pub const DeviceResources = struct {
         var fallback_brush: Handle = null;
         defer release(&fallback_brush);
         if (text_renderer == null) {
-            const color = D2DColor{ .r = pill.fill[0], .g = pill.fill[1], .b = pill.fill[2], .a = pill.fill[3] };
+            const fill_opacity = if (fullscreen_progress > 0.001) core_fill_opacity else pill.opacity;
+            const color = D2DColor{ .r = pill.fill[0], .g = pill.fill[1], .b = pill.fill[2], .a = pill.fill[3] * fill_opacity };
             const create_brush = comMethod(*const fn (*anyopaque, *const D2DColor, Handle, *Handle) callconv(.winapi) HResult, self.d2d_context.?, 8);
             const brush_hr = create_brush(self.d2d_context.?, &color, null, &fallback_brush);
             if (!succeeded(brush_hr) or fallback_brush == null) {
@@ -670,43 +672,83 @@ pub const DeviceResources = struct {
         const transparent = D2DColor{ .r = 0, .g = 0, .b = 0, .a = 0 };
         clear(self.d2d_context.?, &transparent);
 
+        const set_d2d_transform = comMethod(*const fn (*anyopaque, *const D2DMatrix3x2) callconv(.winapi) void, self.d2d_context.?, 30);
+        const identity_transform = D2DMatrix3x2{ .m11 = 1, .m12 = 0, .m21 = 0, .m22 = 1, .dx = 0, .dy = 0 };
+        const resting = if (Geometry.width(pill.resting_pill.rect) > 0) pill.resting_pill else pill.box;
+        const center_x = (resting.rect.left + resting.rect.right) * 0.5;
+        const center_y = (resting.rect.top + resting.rect.bottom) * 0.5;
         const surface_box = pill.box;
-        const rect = surface_box.rect;
-        if (pill.opacity > 0.001 and rect.right > rect.left and rect.bottom > rect.top) {
+        const fullscreen_source_box = pill.fullscreen_source_box orelse surface_box;
+
+        set_d2d_transform(self.d2d_context.?, &identity_transform);
+        if (fullscreen_progress > 0.001) {
+            const morph_surface = Motion.fullscreenMorphBox(fullscreen_source_box, resting, fullscreen_progress);
             if (text_renderer) |text| {
-                text.drawPillSurface(self.d2d_context, surface_box, null, pill.opacity);
+                text.drawFullscreenMorphSurface(self.d2d_context, morph_surface, core_fill_opacity, core_shadow_opacity);
+                if (fullscreen_core_progress > 0.001) {
+                    const icon_size = 16.0;
+                    const icon_left = center_x - icon_size * 0.5;
+                    const icon_top = center_y - icon_size * 0.5;
+                    if (!text.drawCenteredIconGlyph(self.d2d_context, 0xe7f4, .{
+                        .left = icon_left,
+                        .top = icon_top,
+                        .right = icon_left + icon_size,
+                        .bottom = icon_top + icon_size,
+                    }, pill.opacity * fullscreen_core_progress * 0.8)) return false;
+                }
             } else if (fallback_brush) |brush| {
                 const rounded = D2DRoundedRect{
-                    .rect = .{ .left = rect.left, .top = rect.top, .right = rect.right, .bottom = rect.bottom },
-                    .radius_x = @max(0, surface_box.radius_x),
-                    .radius_y = @max(0, surface_box.radius_y),
+                    .rect = .{ .left = morph_surface.rect.left, .top = morph_surface.rect.top, .right = morph_surface.rect.right, .bottom = morph_surface.rect.bottom },
+                    .radius_x = @max(0, morph_surface.radius_x),
+                    .radius_y = @max(0, morph_surface.radius_y),
                 };
                 const fill_rounded = comMethod(*const fn (*anyopaque, *const D2DRoundedRect, *anyopaque) callconv(.winapi) void, self.d2d_context.?, 19);
                 fill_rounded(self.d2d_context.?, &rounded, brush);
             }
+        } else if (text_renderer) |text| {
+            text.drawPillSurface(self.d2d_context, surface_box, null, pill.opacity);
+        } else if (fallback_brush) |brush| {
+            const rounded = D2DRoundedRect{
+                .rect = .{ .left = surface_box.rect.left, .top = surface_box.rect.top, .right = surface_box.rect.right, .bottom = surface_box.rect.bottom },
+                .radius_x = @max(0, surface_box.radius_x),
+                .radius_y = @max(0, surface_box.radius_y),
+            };
+            const fill_rounded = comMethod(*const fn (*anyopaque, *const D2DRoundedRect, *anyopaque) callconv(.winapi) void, self.d2d_context.?, 19);
+            fill_rounded(self.d2d_context.?, &rounded, brush);
         }
-        if (pill.opacity > 0.001) {
+
+        const content_scale = 0.04 + fullscreen_parts_progress * 0.96;
+        const content_transform = D2DMatrix3x2{
+            .m11 = content_scale,
+            .m12 = 0,
+            .m21 = 0,
+            .m22 = content_scale,
+            .dx = center_x * (1 - content_scale),
+            .dy = center_y * (1 - content_scale),
+        };
+        set_d2d_transform(self.d2d_context.?, if (fullscreen_progress > 0.001) &content_transform else &identity_transform);
+        if (content_opacity > 0.001) {
             if (text_renderer) |text| {
                 if (pill.call_up) {
-                    text.drawCallStrip(self.d2d_context, pill.box, pill.call_strip, pill.opacity);
+                    text.drawCallStrip(self.d2d_context, pill.box, pill.call_strip, content_opacity);
                 } else if (pill.music_card_open) {
                     // The expanded music card gets a dedicated clock/weather cap
                     // after its contents are painted below.
                 } else if (pill.line_text.len != 0) {
                     if (pill.line_text_mode == .static) {
-                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, pill.opacity)) return false;
-                    } else if (!text.drawScrollingLine(self.d2d_context, pill.box, pill.line_text, pill.lyric_scroll_dip, pill.opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) return false;
+                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, content_opacity)) return false;
+                    } else if (!text.drawScrollingLine(self.d2d_context, pill.box, pill.line_text, pill.lyric_scroll_dip, content_opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) return false;
                 } else if (clock_style == .compact) {
-                    if (!text.drawStatusLine(self.d2d_context, pill.box, pill.opacity, pill.status_weather)) return false;
-                } else if (!text.drawClock(self.d2d_context, pill.box, clock_style, pill.opacity)) return false;
+                    if (!text.drawStatusLine(self.d2d_context, pill.box, content_opacity, pill.status_weather)) return false;
+                } else if (!text.drawClock(self.d2d_context, pill.box, clock_style, content_opacity)) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and pill.music_present and pill.resting_state == .music_strip and pill.line_text_mode == .scrolling and !pill.call_up) {
+        if (content_opacity > 0.001 and pill.music_present and pill.resting_state == .music_strip and pill.line_text_mode == .scrolling and !pill.call_up) {
             if (text_renderer) |text| {
                 const line_box = if (Geometry.width(pill.resting_pill.rect) > 0) pill.resting_pill else pill.box;
                 if (pill.feature_strip_painter) |painter| {
-                    if (!painter.paint_fn(painter.context, text, self.d2d_context, &line_box, pill.opacity, null)) {
+                    if (!painter.paint_fn(painter.context, text, self.d2d_context, &line_box, content_opacity, null)) {
                         last_render_pill_failure = "feature strip renderer";
                         return false;
                     }
@@ -714,7 +756,7 @@ pub const DeviceResources = struct {
             }
         }
 
-        if (pill.opacity > 0.001 and pill.content_card_painter != null and pill.content_card_box != null and pill.content_card_reveal > 0.5) {
+        if (content_opacity > 0.001 and pill.content_card_painter != null and pill.content_card_box != null and pill.content_card_reveal > 0.5) {
             if (text_renderer) |text| {
                 const card = pill.content_card_box.?;
                 const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.content_card_reveal);
@@ -723,13 +765,13 @@ pub const DeviceResources = struct {
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
                 const painter = pill.content_card_painter.?;
-                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, pill.opacity, null);
+                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, content_opacity, null);
                 pop_clip(self.d2d_context.?);
                 if (!drawn) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and pill.system_panel != null and pill.system_panel_box != null and pill.system_panel_reveal > 0.5) {
+        if (content_opacity > 0.001 and pill.system_panel != null and pill.system_panel_box != null and pill.system_panel_reveal > 0.5) {
             if (text_renderer) |text| {
                 const card = pill.system_panel_box.?;
                 const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.system_panel_reveal);
@@ -737,13 +779,13 @@ pub const DeviceResources = struct {
                 const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
-                const drawn = text.drawSystemPanel(self.d2d_context, card, pill.system_panel.?, pill.opacity);
+                const drawn = text.drawSystemPanel(self.d2d_context, card, pill.system_panel.?, content_opacity);
                 pop_clip(self.d2d_context.?);
                 if (!drawn) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and pill.feature_page_painter != null and pill.feature_page_box != null and pill.feature_page_reveal > 0.5) {
+        if (content_opacity > 0.001 and pill.feature_page_painter != null and pill.feature_page_box != null and pill.feature_page_reveal > 0.5) {
             if (text_renderer) |text| {
                 const card = pill.feature_page_box.?;
                 const fallback_revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.feature_page_reveal);
@@ -755,13 +797,13 @@ pub const DeviceResources = struct {
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
                 const painter = pill.feature_page_painter.?;
-                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, pill.opacity, pill.feature_layout_snapshot);
+                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, content_opacity, pill.feature_layout_snapshot);
                 pop_clip(self.d2d_context.?);
                 if (!drawn) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and pill.music_card_open and !pill.fullscreen_app) {
+        if (content_opacity > 0.001 and pill.music_card_open) {
             if (text_renderer) |text| {
                 const top = pill.box.rect.top + 6;
                 const reveal_opacity = std.math.clamp(pill.feature_page_reveal / 48, 0, 1);
@@ -770,44 +812,62 @@ pub const DeviceResources = struct {
                     .radius_x = 24,
                     .radius_y = 24,
                 };
-                text.drawPillSurface(self.d2d_context, header, null, pill.opacity * reveal_opacity);
-                if (!text.drawStatusLine(self.d2d_context, header, pill.opacity * reveal_opacity, pill.status_weather)) return false;
+                text.drawPillSurface(self.d2d_context, header, null, content_opacity * reveal_opacity);
+                if (!text.drawStatusLine(self.d2d_context, header, content_opacity * reveal_opacity, pill.status_weather)) return false;
             }
         }
 
         // The task row is drawn after the expanded card so its buttons stay
         // visible where the card overlaps the desktop strip, matching the
         // original Renderer::DrawDecks order.
-        if (pill.opacity > 0.001 and !pill.fullscreen_app) {
+        if (content_opacity > 0.001) {
             if (text_renderer) |text| {
                 if (pill.taskbar_view) |view| {
                     var resolved_buttons = view.buttons;
                     const count = @min(view.count, resolved_buttons.len);
                     var overflow_buttons = view.overflow_buttons;
                     const overflow_count = @min(view.overflow_count, overflow_buttons.len);
-                    var all_buttons: [max_task_buttons]TextRenderer.TaskButton = @splat(.{});
+                    var exit_buttons = view.exit_buttons;
+                    const exit_count = @min(view.exit_count, exit_buttons.len);
+                    const live_count = count + overflow_count;
+                    var all_buttons: [max_window_icons]TextRenderer.TaskButton = @splat(.{});
                     @memcpy(all_buttons[0..count], resolved_buttons[0..count]);
                     @memcpy(all_buttons[count .. count + overflow_count], overflow_buttons[0..overflow_count]);
-                    self.pruneWindowIconCache(all_buttons[0 .. count + overflow_count]);
-                    for (all_buttons[0 .. count + overflow_count]) |*button| {
+                    @memcpy(all_buttons[live_count .. live_count + exit_count], exit_buttons[0..exit_count]);
+                    self.pruneWindowIconCache(all_buttons[0 .. live_count + exit_count]);
+                    for (all_buttons[0 .. live_count + exit_count]) |*button| {
                         button.icon = self.iconForWindow(button.*);
                     }
                     @memcpy(resolved_buttons[0..count], all_buttons[0..count]);
                     @memcpy(overflow_buttons[0..overflow_count], all_buttons[count .. count + overflow_count]);
-                    if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], pill.opacity)) return false;
-                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, pill.opacity)) return false;
+                    @memcpy(exit_buttons[0..exit_count], all_buttons[live_count .. live_count + exit_count]);
+                    if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], content_opacity)) return false;
+                    for (view.tray_icons[0..@min(view.tray_count, view.tray_icons.len)], 0..) |tray_icon, index| {
+                        if (tray_icon.png.len > 0) _ = text.drawPngIcon(
+                            self.d2d_context,
+                            34 + index,
+                            tray_icon.png,
+                            tray_icon.revision,
+                            tray_icon.icon_bounds,
+                            content_opacity,
+                        );
+                    }
+                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, content_opacity)) return false;
+                    if (!text.drawTaskIcons(self.d2d_context, exit_buttons[0..exit_count], content_opacity)) return false;
                 }
             }
         }
 
         // Dock controls are independent surfaces packed around the island.
-        if (pill.opacity > 0.001 and !pill.fullscreen_app) {
+        if (content_opacity > 0.001) {
             if (text_renderer) |text| {
                 const deck = pill.deck_box orelse pill.box;
-                text.drawStartButton(self.d2d_context, deck, pill.start_hover, pill.start_open, pill.opacity);
-                if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, pill.tray_open, pill.opacity);
+                text.drawStartButton(self.d2d_context, deck, pill.start_hover, pill.start_open, content_opacity);
+                if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, pill.tray_open, content_opacity);
             }
         }
+
+        set_d2d_transform(self.d2d_context.?, &identity_transform);
 
         const draw_hr = end_draw(self.d2d_context.?, null, null);
         const draw_succeeded = draw_lifecycle.finishDrawing(draw_hr);
