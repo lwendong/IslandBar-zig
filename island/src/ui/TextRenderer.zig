@@ -14,6 +14,7 @@ pub const task_button_count_max: usize = 32;
 pub const system_tile_count_max: usize = 6;
 pub const feature_icon_cache_count: usize = 58;
 const scrolling_line_gutter_dip: f32 = 24;
+const d2d_bitmap_interpolation_linear: i32 = 1;
 
 pub fn lineNeedsScrollForWidth(text_width_dip: f32, strip_width_dip: f32) bool {
     return text_width_dip > strip_width_dip - scrolling_line_gutter_dip;
@@ -563,7 +564,7 @@ pub const TextRenderer = struct {
         const bitmap = self.featureIconBitmap(context, cache_index, png, revision) orelse return false;
         const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context, 26);
         const destination = toD2DRect(bounds);
-        draw(context, bitmap, &destination, opacity, 3, null);
+        draw(context, bitmap, &destination, opacity, d2d_bitmap_interpolation_linear, null);
         return true;
     }
 
@@ -573,7 +574,7 @@ pub const TextRenderer = struct {
         const bitmap = self.rawPixelBitmap(context, &self.rgba_image_cache, pixels, width, height, revision) orelse return pixels == null;
         const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context, 26);
         const destination = toD2DRect(bounds);
-        draw(context, bitmap, &destination, std.math.clamp(opacity, 0, 1), 3, null);
+        draw(context, bitmap, &destination, std.math.clamp(opacity, 0, 1), d2d_bitmap_interpolation_linear, null);
         return true;
     }
 

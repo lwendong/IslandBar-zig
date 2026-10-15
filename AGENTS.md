@@ -727,3 +727,60 @@ Windows 实机回归（操作 + 结果）：
 - **Windows 实机：** `WIN-WINDOW-001` 已更新为验证中心岛体与周边部件同步缩放、整段无明显掉帧及反向展开；状态 `MANUAL_PENDING`，本轮没有真实桌面视觉/帧率实测。
 - **风险 / 未验证：** 8 ms 定时器受 Windows 调度和显示器刷新率影响；DirectComposition 等待 API 在系统不可用或超时时会退回普通绘制节奏。实际帧连续性、不同刷新率和变形起止主观连贯性仍需实测。
 - **回退方式：** 恢复 UI-022 的 source→resting→circle 两段盒体变形及仅前半段的周边缩放；移除稳定源盒、Motion 暂停、8 ms fullscreen poll 和 morph compositor wait；恢复六层 soft shadow，并撤回 `WIN-WINDOW-001` 同步缩放验收句和本记录。保留此前全屏检测、圆形尺寸/透明度及其它 UI 改动，不重置工作区。
+
+## UI-026 — 窗口显示时立即绘制完整任务栏
+
+- **日期 / 目标：** 2026-10-16；避免启动时只显示开始按钮与灵动岛的预绘首帧停留在屏幕上。
+- **原因：** 主程序在显示 HWND 前先绘制一帧占位内容，该帧尚未附加任务栏视图；窗口显示路径没有明确安排一次完整客户区绘制。任务、托盘、箭头和天气内容要到后续 `WM_PAINT` 才生成，因此首屏可能暂时只剩开始按钮和时钟胶囊。
+- **实现：** `NativeWindow.show()` 在显示窗口后失效整个客户区并同步调用 `UpdateWindow`，确保已准备好的 paint callback 在 show 返回前绘制完整任务视图。
+- **改动文件：** `island/src/platform/windows/IslandWindow.zig`、本记录。
+- **非改动范围：** 未更改任务/托盘数据筛选、布局尺寸、绘制样式、窗口检测、安装器或架构状态；未新增或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt src/platform/windows/IslandWindow.zig` 退出码 0；`zig build --summary all --cache-dir .zig-cache-ui-026` 退出码 0，16/16 steps 成功（IslandBar、安装器和全部 smoke/probe）；`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0。首次普通沙箱格式/构建因外部 Zig 标准库 `AccessDenied` 未完成；获准访问本机 Zig 标准库和 Windows SDK 后重跑成功。未运行测试。
+- **Windows 实机：** `WIN-UI-001` 已包含冷启动观察；本轮未操作真实 IslandBar 窗口，状态 `MANUAL_PENDING`，尚未确认任务/托盘/箭头是否在用户机器启动首帧出现。
+- **风险 / 未验证：** `UpdateWindow` 会在 show 调用中同步执行 paint callback，增加的首帧耗时取决于当前渲染工作；实际启动时延与首屏效果仍需原生 GUI 验收。
+- **回退方式：** 从 `NativeWindow.show()` 移除 `InvalidateRect`/`UpdateWindow` 两次调用并删除 `UpdateWindow` 声明，再撤回本条记录；保留既有 UI 与任务/托盘实现。
+
+## UI-027 — 撤回首帧假设并核对正在运行的构建
+
+- **日期 / 目标：** 2026-10-16；继续调查系统托盘接入后任务、天气、下拉箭头与托盘图标全部不可见的问题。
+- **修正：** 用户复测确认 UI-026 的 `InvalidateRect`/`UpdateWindow` 没有解决问题。已从 `IslandWindow.show()` 撤回该改动；UI-026 记录只保留为失败尝试，不视为根因或修复。
+- **当前证据：** `C:\Users\viato\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\IslandBar.lnk`、`IslandBar (safe mode).lnk` 和 `Startup\IslandBar.lnk` 均指向 `C:\Users\viato\IslandBar\island_bar.exe`，该安装目录 exe 的修改时间为 2026-10-14 13:21；本仓库当前源码构建产物是 `island\zig-out\bin\IslandBar.exe`，修改时间为 2026-10-16 01:49。桌面进程检查未能读取当前进程清单，故尚未确认用户截图对应的实际 exe；运行旧安装快捷方式是当前最强线索，仍需用仓库构建产物复核后才能定为根因。
+- **改动范围：** 撤回本轮无效的窗口显示调用；更新人工验收清单和本记录。未改任务、天气、托盘筛选、布局或渲染代码，未覆盖安装目录内的用户文件。
+- **自动验证：** 代码回退后执行 `zig build --summary all --cache-dir .zig-cache-ui-027`，退出码 0，16/16 steps 成功；bundled Python `tools/architecture/check_boundaries.py --report` 退出码 0：2 条既存 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0。未新增或运行测试。
+- **Windows 实机：** 未启动/操作 IslandBar 窗口。`WIN-UI-001` 仍 `MANUAL_PENDING`；必须从仓库当前构建产物运行并确认任务、天气、下拉箭头、托盘四项。
+- **风险 / 未验证：** 尚未证明用户截图来自哪个 exe；若运行当前构建后仍缺项，继续查托盘接入后的渲染结果和 `paintWindow` 快照数据。当前 `IslandWindow.zig` 内容与 HEAD 字节对象一致；Git 因只读 `.git/objects` 无法刷新该文件的工作树 stat，故状态列表可能保留无内容差异的 `M` 标记，`git diff` 未显示该文件改动。
+- **下一步 / 回退：** 用 `island\zig-out\bin\IslandBar.exe` 复核与快捷方式旧版本的差别；本步骤回退仅需恢复 `IslandWindow.show()` 的两行首帧刷新代码并撤回对应的台账/手测清单修正，不重置其他改动。
+
+## UI-028 — 绘制失败可诊断并自动恢复
+
+- **日期 / 目标：** 2026-10-16；修复完整任务栏/天气/托盘帧绘制失败后停留在启动简化画面的情况。
+- **Git/代码调查结论：** `paintWindow()` 会先生成全量任务栏视图，但此前 `renderPill()` 返回失败后仍结束本次 `WM_PAINT`，没有记录失败阶段，也没有重绘计划；若当前屏幕仍是显示窗口前的简化帧，任务、天气、托盘与箭头就会一起缺失。该失败路径是代码已确认的可能机制，导致当前截图的具体 HRESULT/阶段仍需运行日志确认；UI-027 指向旧安装快捷方式的线索也尚未排除。
+- **实现：** Renderer 为完整帧的各类提前失败设置阶段名和 HRESULT；同一次 `WM_PAINT` 立刻重试一次，设备丢失时尝试重建设备并同步清空 TextRenderer 的设备缓存；连续失败则以 250 ms 起、最高 2 s 的退避间隔安排后续重绘，成功呈现后清除退避及错误状态。首次相同故障只记录一次，日志包含失败阶段/HRESULT 与重试结果。
+- **改动文件：** `island/src/app/main.zig`、`island/src/ui/Renderer.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。
+- **非改动范围：** 未改任务/天气/托盘筛选、布局、UI 样式、窗口显示逻辑、安装器或启动快捷方式；未触碰用户未跟踪的 `island/src/core/TaskStripLayout.zig`；未新增或运行测试。
+- **自动验证：** Zig `0.17.0`；`zig fmt --check src/app/main.zig src/ui/Renderer.zig` 退出码 0；首次完整构建发现重试局部变量与外层 `now` 同名，修正后 `zig build --summary all --cache-dir .zig-cache-ui-028` 退出码 0、16/16 steps 成功（IslandBar、安装器和全部 smoke/probe）；`python tools/architecture/check_boundaries.py --report` 退出码 0：2 条既存 WIC 边、0 新增、0 移除、0 未解析；`git diff --check` 退出码 0，仅有 LF→CRLF 提示。未新增或运行测试。
+- **Windows 实机：** 未启动/操作 IslandBar 窗口；`WIN-UI-001` 仍为 `MANUAL_PENDING`。从仓库构建产物启动后观察任务、天气、箭头、托盘，并核对 `renderer: frame failed at ...` 日志与实际 exe 路径。
+- **风险 / 未验证：** 自动重试能避免一次暂态绘制失败让旧帧长期不变，但不能修复持续性数据/绘制错误；本轮未获得实际故障阶段和 HRESULT，也未证明用户运行的是仓库最新构建。
+- **回退方式：** 仅移除本步 PaintContext 错误/重试状态、`reportRenderFailure`/设备缓存同步和 `pointerStep` 退避重绘；恢复 `paintWindow()` 单次 `renderPill()` 调用及 Renderer 原始提前返回；撤回本条与 `WIN-UI-001` 诊断补充。保留工作区其它改动，不重置工作区。
+
+## UI-029 — 当前构建复核与启动路径定位
+
+- **日期 / 目标：** 2026-10-16；复核用户“任务/天气不显示、点击无效”的截图对应版本，并确保 UI-028 修复版可构建。
+- **调查证据：** 开始菜单和 Startup 的 IslandBar 快捷方式均指向 `C:\Users\viato\IslandBar\island_bar.exe`；该文件大小 1,803,776 bytes，修改时间 2026-10-14 05:21:48 UTC。仓库构建产物为 `island\zig-out\bin\IslandBar.exe`；重建后大小 6,723,584 bytes，修改时间 2026-10-15 18:22:15 UTC（2026-10-16 02:22:15 Asia/Shanghai），晚于用户截图约 6 分钟。旧安装日志最后更新时间是 2026-10-15 20:19（本地时间），曾记录 5–8 个任务按钮及鼠标悬停/展开；该旧日志没有天气成功更新记录。证据强烈指向用户截图由旧安装版本产生，但未采集截图对应进程映像路径，因此不能把版本差异写成已证实的运行时根因。
+- **修复版内容：** 当前构建包含 UI-028：完整帧绘制失败时记录阶段/HRESULT、立即重试一次，连续失败时安排退避重绘；只有成功帧才发布新的任务栏命中快照。因此绘制持续失败仍可能同时造成控件不可见和不可点击，需以当前版本日志继续区分具体故障。
+- **改动文件：** `AGENTS.md`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`；本步骤未修改生产源码，保留此前工作区的 UI-028 源码差异与未跟踪文件。
+- **自动验证：** Zig `0.17.0`；从 `island/` 执行 `zig build --summary all --cache-dir .zig-cache-issue-20261016`，退出码 0，16/16 steps succeeded，包含 IslandBar、安装器及全部既有 smoke/probe 构建目标。未新增或运行测试。
+- **Windows 实机：** `WIN-UI-001` 仍 `MANUAL_PENDING`。当前会话未能取得 IslandBar 的可操作运行窗口；未启动安装器或替换安装目录文件。
+- **风险 / 未验证：** 当前构建不能自动更新旧安装文件或已有快捷方式；未证明截图所用进程路径，也未确认天气网络/位置权限或当前构建下的实际点击行为。需直接启动 `island\zig-out\bin\IslandBar.exe` 或安装当前构建后记录路径、截图及 `renderer: frame failed at ...` 日志。
+- **回退方式：** 本步骤仅追加台账与人工验收说明；回退时删除本条及 `WINDOWS-MANUAL-TESTS.md` 两处新增说明即可，不触碰已有源码和用户文件。
+
+## UI-030 — 修复托盘 PNG 位图绘制参数
+
+- **日期 / 目标：** 2026-10-16；根据用户从 `zig build run` 新取得的 D2D 日志，修复任务、天气、托盘与箭头同时缺失的绘制失败。
+- **根因证据：** 日志明确为 `HRESULT=0x80070057`、`D2D tag=tray_icons:0`，定位到第 0 个托盘图标。`TextRenderer.drawPngIcon()` 与 `drawRgbaImage()` 传给 `ID2D1RenderTarget::DrawBitmap` 的插值参数是 `3`；该 API 的位图插值枚举仅定义最近邻 `0` 和线性 `1`，所以 `3` 会导致 `E_INVALIDARG`，错误延迟至 `EndDraw` 才出现。D2D tag 诊断已保留，可定位其它绘制组。
+- **实现：** 两个通用位图入口现在使用命名常量 `d2d_bitmap_interpolation_linear = 1`。没有更改托盘筛选、布局、任务/天气状态或视觉样式。
+- **改动文件：** `island/src/ui/TextRenderer.zig`、`island/src/ui/Renderer.zig`、`island/src/app/main.zig`、`docs/refactor/WINDOWS-MANUAL-TESTS.md`、本记录。Renderer/App 中本轮增加的 Direct2D 标签及日志用于输出具体失败组与索引；保留 UI-028 的重试恢复逻辑。
+- **自动验证：** Zig `0.17.0`；`zig build --summary all --cache-dir .zig-cache-ui-030` 退出码 0，16/16 steps 成功（IslandBar、安装器和全部 smoke/probe）。`zig ast-check src/ui/Renderer.zig` 退出码 0；`zig fmt --check src/ui/TextRenderer.zig src/app/main.zig` 退出码 0。Zig 格式化器对 `Renderer.zig` 返回 `error: formatting ... Unexpected`，因此该文件格式检查未通过，尽管语法检查与完整构建通过；`git diff --check` 退出码 0，仅有 LF→CRLF 提示。依赖守卫退出码 0：2 条既有 WIC 边、0 新增、0 移除、0 未解析。未新增或运行测试。
+- **Windows 实机：** 修复后尚未重新运行 GUI；`WIN-UI-001` 仍为 `MANUAL_PENDING`。需要用户从本轮 `zig build run` 新启动一次，确认完整 UI 出现且不再产生 `tray_icons:0 / 0x80070057`。
+- **风险 / 未验证：** 编译确认了接口和参数类型，但不代替真实 D2D 绘制验收；如果仍失败，保留的 D2D tag 会指向新的失败绘制组。Renderer 格式化器的 `Unexpected` 原因尚未定位。
+- **回退方式：** 将 `drawPngIcon()` 与 `drawRgbaImage()` 的 DrawBitmap 插值实参恢复为原始值并移除此步常量；撤回 D2D tag/log 增量与此记录（若需要完整回到 UI-029，再按 UI-028 的步骤回退诊断/重试）。保留工作区其它变化，不重置用户数据。

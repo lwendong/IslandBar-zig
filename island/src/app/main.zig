@@ -896,6 +896,13 @@ const PaintContext = struct {
     renderer_generation: u64 = 0,
     last_graphics_recovery_ms: u64 = 0,
     last_frame_duration_ms: u64 = 0,
+    render_failure_active: bool = false,
+    last_render_failure_stage: []const u8 = "",
+    last_render_failure_hresult: u32 = 0,
+    last_render_failure_tag1: u64 = 0,
+    last_render_failure_tag2: u64 = 0,
+    render_retry_at_ms: u64 = 0,
+    render_retry_delay_ms: u64 = 250,
     trace_ui_enabled: bool = false,
     text_renderer: *TextRenderer.TextRenderer,
     pill: Renderer.PillAppearance,
@@ -1336,6 +1343,50 @@ fn prepareTaskIconTransitions(context: *PaintContext, view: *TaskbarPage.View, n
     }
 }
 
+fn reportRenderFailure(
+    context: *PaintContext,
+    stage: []const u8,
+    hresult: u32,
+    tag1: u64,
+    tag2: u64,
+    retry_stage: []const u8,
+    retry_hresult: u32,
+    retry_tag1: u64,
+    retry_tag2: u64,
+    retry_succeeded: bool,
+) void {
+    if (context.render_failure_active and
+        context.last_render_failure_hresult == hresult and
+        context.last_render_failure_tag1 == tag1 and
+        context.last_render_failure_tag2 == tag2 and
+        std.mem.eql(u8, context.last_render_failure_stage, stage)) return;
+    context.render_failure_active = true;
+    context.last_render_failure_stage = stage;
+    context.last_render_failure_hresult = hresult;
+    context.last_render_failure_tag1 = tag1;
+    context.last_render_failure_tag2 = tag2;
+    logFormatted(
+        "renderer: frame failed at {s} (HRESULT=0x{x}, D2D tag={s}:{d}); retry {s} at {s} (HRESULT=0x{x}, D2D tag={s}:{d})",
+        .{
+            stage,
+            hresult,
+            Renderer.renderTagName(tag1),
+            tag2,
+            if (retry_succeeded) "succeeded" else "failed",
+            retry_stage,
+            retry_hresult,
+            Renderer.renderTagName(retry_tag1),
+            retry_tag2,
+        },
+    );
+}
+
+fn syncRendererTextResources(context: *PaintContext) void {
+    if (context.renderer.generation == context.renderer_generation) return;
+    context.text_renderer.invalidateDeviceResources();
+    context.renderer_generation = context.renderer.generation;
+}
+
 fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     const opaque_context = context orelse {
         paintClock(window, null);
@@ -1647,12 +1698,60 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     else
         null;
     pill.fullscreen_source_box = paint_context.fullscreen_morph_source_box;
-    if (paint_context.renderer.generation != paint_context.renderer_generation) {
-        paint_context.text_renderer.invalidateDeviceResources();
-        paint_context.renderer_generation = paint_context.renderer.generation;
-    }
     if (!paint_context.renderer.isReady()) _ = recoverGraphicsDevice(paint_context, GetTickCount64());
-    const rendered = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact);
+    syncRendererTextResources(paint_context);
+    const first_rendered = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact);
+    var rendered = first_rendered;
+    if (!first_rendered) {
+        const first_failure_stage = if (Renderer.last_render_pill_failure.len > 0)
+            Renderer.last_render_pill_failure
+        else
+            "unclassified render failure";
+        const first_failure_hresult: u32 = @bitCast(Renderer.last_render_pill_hresult);
+        const first_failure_tag1 = Renderer.last_render_pill_tag1;
+        const first_failure_tag2 = Renderer.last_render_pill_tag2;
+        if (paint_context.renderer.lastFailureIsDeviceLoss()) {
+            _ = recoverGraphicsDevice(paint_context, GetTickCount64());
+        }
+        syncRendererTextResources(paint_context);
+        rendered = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact);
+        const retry_failure_stage = if (rendered)
+            "render succeeded"
+        else if (Renderer.last_render_pill_failure.len > 0)
+            Renderer.last_render_pill_failure
+        else
+            "unclassified render failure";
+        const retry_failure_hresult: u32 = if (rendered) 0 else @bitCast(Renderer.last_render_pill_hresult);
+        const retry_failure_tag1 = Renderer.last_render_pill_tag1;
+        const retry_failure_tag2 = Renderer.last_render_pill_tag2;
+        reportRenderFailure(
+            paint_context,
+            first_failure_stage,
+            first_failure_hresult,
+            first_failure_tag1,
+            first_failure_tag2,
+            retry_failure_stage,
+            retry_failure_hresult,
+            retry_failure_tag1,
+            retry_failure_tag2,
+            rendered,
+        );
+        if (!rendered) {
+            const retry_now = GetTickCount64();
+            paint_context.render_retry_at_ms = retry_now +| paint_context.render_retry_delay_ms;
+            paint_context.render_retry_delay_ms = @min(paint_context.render_retry_delay_ms * 2, 2000);
+            if (paint_context.renderer.lastFailureIsDeviceLoss()) _ = recoverGraphicsDevice(paint_context, retry_now);
+        }
+    }
+    if (rendered) {
+        paint_context.render_failure_active = false;
+        paint_context.last_render_failure_stage = "";
+        paint_context.last_render_failure_hresult = 0;
+        paint_context.last_render_failure_tag1 = 0;
+        paint_context.last_render_failure_tag2 = 0;
+        paint_context.render_retry_at_ms = 0;
+        paint_context.render_retry_delay_ms = 250;
+    }
     if (rendered and !paint_context.fullscreen_app and paint_context.fullscreen_morph_progress <= 0.0001) {
         paint_context.fullscreen_morph_source_box = pill.box;
     }
@@ -2866,6 +2965,10 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
     const context: *PaintContext = @ptrCast(@alignCast(raw));
     const window = context.window orelse return;
     const now = GetTickCount64();
+    if (context.render_retry_at_ms != 0 and now >= context.render_retry_at_ms) {
+        context.render_retry_at_ms = 0;
+        window.invalidate();
+    }
     const elapsed_ms = if (context.last_tick_ms == 0) 0 else now -| context.last_tick_ms;
     context.last_tick_ms = now;
     const dt = @as(f32, @floatFromInt(@min(elapsed_ms, 100))) / 1000;

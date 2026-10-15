@@ -14,6 +14,20 @@ const PagePainter = @import("PagePainter");
 const HResult = i32;
 const UINT = u32;
 const Handle = ?*anyopaque;
+const DrawTag = struct {
+    pub const surface: u64 = 1;
+    pub const status_line: u64 = 2;
+    pub const feature_strip: u64 = 3;
+    pub const content_card: u64 = 4;
+    pub const system_panel: u64 = 5;
+    pub const feature_page: u64 = 6;
+    pub const music_header: u64 = 7;
+    pub const task_icons: u64 = 8;
+    pub const tray_icons: u64 = 9;
+    pub const task_overflow: u64 = 10;
+    pub const exiting_task_icons: u64 = 11;
+    pub const dock_controls: u64 = 12;
+};
 const Guid = extern struct { data1: u32, data2: u16, data3: u16, data4: [8]u8 };
 const UnknownVTable = extern struct {
     query_interface: *const fn (*anyopaque, *const Guid, *?*anyopaque) callconv(.winapi) HResult,
@@ -584,7 +598,12 @@ pub const DeviceResources = struct {
     pub fn renderPill(self: *DeviceResources, pill: PillAppearance, text_renderer: ?*TextRenderer.TextRenderer, clock_style: TextRenderer.ClockStyle) bool {
         last_render_pill_failure = "";
         last_render_pill_hresult = 0;
-        if (!self.isReady() or !self.visual_bound) return false;
+        last_render_pill_tag1 = 0;
+        last_render_pill_tag2 = 0;
+        if (!self.isReady() or !self.visual_bound) {
+            last_render_pill_failure = "renderer unavailable";
+            return false;
+        }
         const fullscreen_progress = std.math.clamp(pill.fullscreen_progress, 0, 1);
         const fullscreen_parts_progress = 1 - fullscreen_progress;
         const fullscreen_core_progress = std.math.clamp((fullscreen_progress - 0.5) * 2, 0, 1);
@@ -624,6 +643,7 @@ pub const DeviceResources = struct {
         var draw_lifecycle = DrawLifecycle.DrawLifecycle{};
         if (!draw_lifecycle.attachTarget()) {
             set_target(self.d2d_context.?, null);
+            last_render_pill_failure = "D2D attach target";
             return false;
         }
 
@@ -653,8 +673,12 @@ pub const DeviceResources = struct {
         const end_draw = comMethod(*const fn (*anyopaque, ?*u64, ?*u64) callconv(.winapi) HResult, self.d2d_context.?, 49);
         defer {
             if (draw_lifecycle.stage == .drawing) {
-                const deferred_hr = end_draw(self.d2d_context.?, null, null);
+                var deferred_tag1: u64 = 0;
+                var deferred_tag2: u64 = 0;
+                const deferred_hr = end_draw(self.d2d_context.?, &deferred_tag1, &deferred_tag2);
                 _ = draw_lifecycle.finishDrawing(deferred_hr);
+                last_render_pill_tag1 = deferred_tag1;
+                last_render_pill_tag2 = deferred_tag2;
                 if (!succeeded(deferred_hr)) {
                     if (last_render_pill_failure.len == 0) last_render_pill_failure = "D2D EndDraw";
                     last_render_pill_hresult = deferred_hr;
@@ -684,6 +708,7 @@ pub const DeviceResources = struct {
         if (fullscreen_progress > 0.001) {
             const morph_surface = Motion.fullscreenMorphBox(fullscreen_source_box, resting, fullscreen_progress);
             if (text_renderer) |text| {
+                setDrawTag(self.d2d_context.?, DrawTag.surface, 0);
                 text.drawFullscreenMorphSurface(self.d2d_context, morph_surface, core_fill_opacity, core_shadow_opacity);
                 if (fullscreen_core_progress > 0.001) {
                     const icon_size = 16.0;
@@ -694,7 +719,10 @@ pub const DeviceResources = struct {
                         .top = icon_top,
                         .right = icon_left + icon_size,
                         .bottom = icon_top + icon_size,
-                    }, pill.opacity * fullscreen_core_progress * 0.8)) return false;
+                    }, pill.opacity * fullscreen_core_progress * 0.8)) {
+                        last_render_pill_failure = "fullscreen notification glyph";
+                        return false;
+                    }
                 }
             } else if (fallback_brush) |brush| {
                 const rounded = D2DRoundedRect{
@@ -706,6 +734,7 @@ pub const DeviceResources = struct {
                 fill_rounded(self.d2d_context.?, &rounded, brush);
             }
         } else if (text_renderer) |text| {
+            setDrawTag(self.d2d_context.?, DrawTag.surface, 0);
             text.drawPillSurface(self.d2d_context, surface_box, null, pill.opacity);
         } else if (fallback_brush) |brush| {
             const rounded = D2DRoundedRect{
@@ -729,6 +758,7 @@ pub const DeviceResources = struct {
         set_d2d_transform(self.d2d_context.?, if (fullscreen_progress > 0.001) &content_transform else &identity_transform);
         if (content_opacity > 0.001) {
             if (text_renderer) |text| {
+                setDrawTag(self.d2d_context.?, DrawTag.status_line, 0);
                 if (pill.call_up) {
                     text.drawCallStrip(self.d2d_context, pill.box, pill.call_strip, content_opacity);
                 } else if (pill.music_card_open) {
@@ -736,11 +766,23 @@ pub const DeviceResources = struct {
                     // after its contents are painted below.
                 } else if (pill.line_text.len != 0) {
                     if (pill.line_text_mode == .static) {
-                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, content_opacity)) return false;
-                    } else if (!text.drawScrollingLine(self.d2d_context, pill.box, pill.line_text, pill.lyric_scroll_dip, content_opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) return false;
+                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, content_opacity)) {
+                            last_render_pill_failure = "inline status text";
+                            return false;
+                        }
+                    } else if (!text.drawScrollingLine(self.d2d_context, pill.box, pill.line_text, pill.lyric_scroll_dip, content_opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) {
+                        last_render_pill_failure = "scrolling status text";
+                        return false;
+                    }
                 } else if (clock_style == .compact) {
-                    if (!text.drawStatusLine(self.d2d_context, pill.box, content_opacity, pill.status_weather)) return false;
-                } else if (!text.drawClock(self.d2d_context, pill.box, clock_style, content_opacity)) return false;
+                    if (!text.drawStatusLine(self.d2d_context, pill.box, content_opacity, pill.status_weather)) {
+                        last_render_pill_failure = "status line";
+                        return false;
+                    }
+                } else if (!text.drawClock(self.d2d_context, pill.box, clock_style, content_opacity)) {
+                    last_render_pill_failure = "clock text";
+                    return false;
+                }
             }
         }
 
@@ -748,6 +790,7 @@ pub const DeviceResources = struct {
             if (text_renderer) |text| {
                 const line_box = if (Geometry.width(pill.resting_pill.rect) > 0) pill.resting_pill else pill.box;
                 if (pill.feature_strip_painter) |painter| {
+                    setDrawTag(self.d2d_context.?, DrawTag.feature_strip, 0);
                     if (!painter.paint_fn(painter.context, text, self.d2d_context, &line_box, content_opacity, null)) {
                         last_render_pill_failure = "feature strip renderer";
                         return false;
@@ -765,9 +808,13 @@ pub const DeviceResources = struct {
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
                 const painter = pill.content_card_painter.?;
+                setDrawTag(self.d2d_context.?, DrawTag.content_card, 0);
                 const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, content_opacity, null);
                 pop_clip(self.d2d_context.?);
-                if (!drawn) return false;
+                if (!drawn) {
+                    last_render_pill_failure = "content card painter";
+                    return false;
+                }
             }
         }
 
@@ -778,10 +825,14 @@ pub const DeviceResources = struct {
                 const clip = D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = revealed_bottom };
                 const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
+                setDrawTag(self.d2d_context.?, DrawTag.system_panel, 0);
                 push_clip(self.d2d_context.?, &clip, 0);
                 const drawn = text.drawSystemPanel(self.d2d_context, card, pill.system_panel.?, content_opacity);
                 pop_clip(self.d2d_context.?);
-                if (!drawn) return false;
+                if (!drawn) {
+                    last_render_pill_failure = "system panel painter";
+                    return false;
+                }
             }
         }
 
@@ -795,11 +846,15 @@ pub const DeviceResources = struct {
                 } else D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = fallback_revealed_bottom };
                 const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
+                setDrawTag(self.d2d_context.?, DrawTag.feature_page, 0);
                 push_clip(self.d2d_context.?, &clip, 0);
                 const painter = pill.feature_page_painter.?;
                 const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, content_opacity, pill.feature_layout_snapshot);
                 pop_clip(self.d2d_context.?);
-                if (!drawn) return false;
+                if (!drawn) {
+                    last_render_pill_failure = "feature page painter";
+                    return false;
+                }
             }
         }
 
@@ -812,8 +867,12 @@ pub const DeviceResources = struct {
                     .radius_x = 24,
                     .radius_y = 24,
                 };
+                setDrawTag(self.d2d_context.?, DrawTag.music_header, 0);
                 text.drawPillSurface(self.d2d_context, header, null, content_opacity * reveal_opacity);
-                if (!text.drawStatusLine(self.d2d_context, header, content_opacity * reveal_opacity, pill.status_weather)) return false;
+                if (!text.drawStatusLine(self.d2d_context, header, content_opacity * reveal_opacity, pill.status_weather)) {
+                    last_render_pill_failure = "music card status line";
+                    return false;
+                }
             }
         }
 
@@ -841,19 +900,34 @@ pub const DeviceResources = struct {
                     @memcpy(resolved_buttons[0..count], all_buttons[0..count]);
                     @memcpy(overflow_buttons[0..overflow_count], all_buttons[count .. count + overflow_count]);
                     @memcpy(exit_buttons[0..exit_count], all_buttons[live_count .. live_count + exit_count]);
-                    if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], content_opacity)) return false;
+                    setDrawTag(self.d2d_context.?, DrawTag.task_icons, 0);
+                    if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], content_opacity)) {
+                        last_render_pill_failure = "task icons";
+                        return false;
+                    }
                     for (view.tray_icons[0..@min(view.tray_count, view.tray_icons.len)], 0..) |tray_icon, index| {
-                        if (tray_icon.png.len > 0) _ = text.drawPngIcon(
+                        if (tray_icon.png.len > 0) {
+                            setDrawTag(self.d2d_context.?, DrawTag.tray_icons, index);
+                            _ = text.drawPngIcon(
                             self.d2d_context,
                             34 + index,
                             tray_icon.png,
                             tray_icon.revision,
                             tray_icon.icon_bounds,
                             content_opacity,
-                        );
+                            );
+                        }
                     }
-                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, content_opacity)) return false;
-                    if (!text.drawTaskIcons(self.d2d_context, exit_buttons[0..exit_count], content_opacity)) return false;
+                    setDrawTag(self.d2d_context.?, DrawTag.task_overflow, 0);
+                    if (view.overflow_open and !text.drawTaskOverflow(self.d2d_context, view.overflow_bounds, overflow_buttons[0..overflow_count], view.system_entry_bounds, view.tray_entry_bounds, pill.system_hover, pill.tray_entry_hover, content_opacity)) {
+                        last_render_pill_failure = "task overflow";
+                        return false;
+                    }
+                    setDrawTag(self.d2d_context.?, DrawTag.exiting_task_icons, 0);
+                    if (!text.drawTaskIcons(self.d2d_context, exit_buttons[0..exit_count], content_opacity)) {
+                        last_render_pill_failure = "exiting task icons";
+                        return false;
+                    }
                 }
             }
         }
@@ -862,6 +936,7 @@ pub const DeviceResources = struct {
         if (content_opacity > 0.001) {
             if (text_renderer) |text| {
                 const deck = pill.deck_box orelse pill.box;
+                setDrawTag(self.d2d_context.?, DrawTag.dock_controls, 0);
                 text.drawStartButton(self.d2d_context, deck, pill.start_hover, pill.start_open, content_opacity);
                 if (pill.taskbar_view) |view| text.drawOverflowButton(self.d2d_context, view.overflow_button_bounds, pill.tray_hover, pill.tray_open, content_opacity);
             }
@@ -869,7 +944,11 @@ pub const DeviceResources = struct {
 
         set_d2d_transform(self.d2d_context.?, &identity_transform);
 
-        const draw_hr = end_draw(self.d2d_context.?, null, null);
+        var draw_tag1: u64 = 0;
+        var draw_tag2: u64 = 0;
+        const draw_hr = end_draw(self.d2d_context.?, &draw_tag1, &draw_tag2);
+        last_render_pill_tag1 = draw_tag1;
+        last_render_pill_tag2 = draw_tag2;
         const draw_succeeded = draw_lifecycle.finishDrawing(draw_hr);
         set_target(self.d2d_context.?, null);
         std.debug.assert(draw_lifecycle.detachTarget());
@@ -1306,6 +1385,34 @@ pub var last_background_png_length: usize = 0;
 pub var last_native_check_hresult: HResult = 0;
 pub var last_render_pill_failure: []const u8 = "";
 pub var last_render_pill_hresult: HResult = 0;
+pub var last_render_pill_tag1: u64 = 0;
+pub var last_render_pill_tag2: u64 = 0;
+
+pub fn renderTagName(tag: u64) []const u8 {
+    return switch (tag) {
+        0 => "none",
+        1 => "surface",
+        2 => "status_line",
+        3 => "feature_strip",
+        4 => "content_card",
+        5 => "system_panel",
+        6 => "feature_page",
+        7 => "music_header",
+        8 => "task_icons",
+        9 => "tray_icons",
+        10 => "task_overflow",
+        11 => "exiting_task_icons",
+        12 => "dock_controls",
+        else => "unknown",
+    };
+}
+
+fn setDrawTag(context: *anyopaque, tag: u64, detail: u64) void {
+    // ID2D1RenderTarget::SetTags is vtable slot 38; EndDraw returns the tag
+    // active when a deferred drawing error was recorded.
+    const set_tags = comMethod(*const fn (*anyopaque, u64, u64) callconv(.winapi) void, context, 38);
+    set_tags(context, tag, detail);
+}
 
 const NativeMediaCardContext = struct {
     content: *const TextRenderer.MediaCardContent,
