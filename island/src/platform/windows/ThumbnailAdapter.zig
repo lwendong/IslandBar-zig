@@ -1,10 +1,6 @@
 const std = @import("std");
+const ThumbnailContract = @import("ThumbnailContract");
 
-pub const max_width_dip: f32 = 260;
-pub const max_height_dip: f32 = 160;
-pub const gap_dip: f32 = 10;
-pub const pad_dip: f32 = 8;
-pub const title_dip: f32 = 22;
 pub const radius_dip: f32 = 12;
 
 const HANDLE = ?*anyopaque;
@@ -24,8 +20,8 @@ const LPARAM = isize;
 const LRESULT = isize;
 const WindowProc = *const fn (HWND, UINT, WPARAM, LPARAM) callconv(.winapi) LRESULT;
 
-pub const Rect = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
-pub const Size = extern struct { cx: i32, cy: i32 };
+pub const Rect = ThumbnailContract.Rect;
+pub const Size = ThumbnailContract.Size;
 const PaintStruct = extern struct {
     hdc: HDC,
     erase: BOOL,
@@ -71,11 +67,7 @@ const ThumbnailProperties = extern struct {
     source_client_area_only: BOOL,
 };
 
-pub const ThumbnailPlacement = struct {
-    card: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
-    picture: Rect = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
-    valid: bool = false,
-};
+pub const ThumbnailPlacement = ThumbnailContract.Placement;
 
 extern "kernel32" fn GetModuleHandleW(module_name: ?[*:0]const u16) callconv(.winapi) HINSTANCE;
 extern "kernel32" fn GetLastError() callconv(.winapi) DWORD;
@@ -158,61 +150,7 @@ fn rgb(red: u8, green: u8, blue: u8) DWORD {
     return @as(DWORD, red) | (@as(DWORD, green) << 8) | (@as(DWORD, blue) << 16);
 }
 
-fn roundPixel(value: f32) i32 {
-    return @intFromFloat(@round(value));
-}
-
-/// Computes a fixed-size card and an aspect-preserving thumbnail placement in screen pixels.
-pub fn thumbnailBoxFor(source_width_px: i32, source_height_px: i32, icon_box_px: Rect, monitor_px: Rect, scale_arg: f32) ThumbnailPlacement {
-    var placement = ThumbnailPlacement{};
-    const scale = if (scale_arg <= 0) 1 else scale_arg;
-    const slot_width = max_width_dip * scale;
-    const slot_height = max_height_dip * scale;
-    const pad = pad_dip * scale;
-    const title = title_dip * scale;
-    const card_width = slot_width + pad * 2;
-    const card_height = slot_height + pad * 2 + title;
-    var width = slot_width;
-    var height = slot_height;
-    if (source_width_px > 0 and source_height_px > 0) {
-        const aspect = @as(f32, @floatFromInt(source_width_px)) / @as(f32, @floatFromInt(source_height_px));
-        width = slot_width;
-        height = width / aspect;
-        if (height > slot_height) {
-            height = slot_height;
-            width = height * aspect;
-        }
-        if (width < 1) width = 1;
-        if (height < 1) height = 1;
-    }
-    const center_x = (@as(f32, @floatFromInt(icon_box_px.left)) + @as(f32, @floatFromInt(icon_box_px.right))) * 0.5;
-    var left = center_x - card_width * 0.5;
-    var top = @as(f32, @floatFromInt(icon_box_px.bottom)) + gap_dip * scale;
-    const monitor_left: f32 = @floatFromInt(monitor_px.left);
-    const monitor_right: f32 = @floatFromInt(monitor_px.right);
-    const monitor_top: f32 = @floatFromInt(monitor_px.top);
-    const monitor_bottom: f32 = @floatFromInt(monitor_px.bottom);
-    if (left + card_width > monitor_right) left = monitor_right - card_width;
-    if (left < monitor_left) left = monitor_left;
-    if (top + card_height > monitor_bottom) top = monitor_bottom - card_height;
-    if (top < monitor_top) top = monitor_top;
-    placement.card = .{
-        .left = @intFromFloat(left),
-        .top = @intFromFloat(top),
-        .right = @intFromFloat(left + card_width),
-        .bottom = @intFromFloat(top + card_height),
-    };
-    const slot_left = @as(f32, @floatFromInt(placement.card.left)) + pad;
-    const slot_top = @as(f32, @floatFromInt(placement.card.top)) + pad + title;
-    placement.picture.left = roundPixel(slot_left + (slot_width - width) * 0.5);
-    placement.picture.top = roundPixel(slot_top + (slot_height - height) * 0.5);
-    placement.picture.right = placement.picture.left + roundPixel(width);
-    placement.picture.bottom = placement.picture.top + roundPixel(height);
-    placement.valid = placement.card.right > placement.card.left and placement.card.bottom > placement.card.top and placement.picture.right > placement.picture.left and placement.picture.bottom > placement.picture.top;
-    return placement;
-}
-
-pub const ThumbnailPreview = struct {
+pub const ThumbnailAdapter = struct {
     hwnd: HWND = null,
     source: HWND = null,
     thumbnail: HTHUMBNAIL = null,
@@ -225,7 +163,7 @@ pub const ThumbnailPreview = struct {
     last_result: i64 = 0,
     refusals: i32 = 0,
 
-    pub fn create(self: *ThumbnailPreview, owner: HWND) bool {
+    pub fn create(self: *ThumbnailAdapter, owner: HWND) bool {
         if (self.hwnd != null) return true;
         const instance = GetModuleHandleW(null);
         var window_class = WindowClassExW{
@@ -248,7 +186,7 @@ pub const ThumbnailPreview = struct {
         return self.hwnd != null;
     }
 
-    pub fn destroy(self: *ThumbnailPreview) void {
+    pub fn destroy(self: *ThumbnailAdapter) void {
         if (self.thumbnail) |thumbnail| {
             _ = DwmUnregisterThumbnail(thumbnail);
             self.thumbnail = null;
@@ -261,11 +199,11 @@ pub const ThumbnailPreview = struct {
         self.visible = false;
     }
 
-    pub fn ready(self: *const ThumbnailPreview) bool {
+    pub fn ready(self: *const ThumbnailAdapter) bool {
         return self.hwnd != null;
     }
 
-    pub fn begin(self: *ThumbnailPreview, source: HWND) Size {
+    pub fn begin(self: *ThumbnailAdapter, source: HWND) Size {
         const window = self.hwnd orelse return .{ .cx = 0, .cy = 0 };
         if (source == null or IsWindow(source) == 0) return .{ .cx = 0, .cy = 0 };
         if (self.source != source or self.thumbnail == null) {
@@ -299,7 +237,7 @@ pub const ThumbnailPreview = struct {
         return self.source_size;
     }
 
-    pub fn place(self: *ThumbnailPreview, placement: *const ThumbnailPlacement) bool {
+    pub fn place(self: *ThumbnailAdapter, placement: *const ThumbnailPlacement) bool {
         const window = self.hwnd orelse return false;
         const thumbnail = self.thumbnail orelse return false;
         if (!placement.valid) return false;
@@ -333,14 +271,14 @@ pub const ThumbnailPreview = struct {
         return true;
     }
 
-    pub fn hide(self: *ThumbnailPreview) void {
+    pub fn hide(self: *ThumbnailAdapter) void {
         const window = self.hwnd orelse return;
         if (!self.visible) return;
         _ = ShowWindow(window, sw_hide);
         self.visible = false;
     }
 
-    fn paintCard(self: *ThumbnailPreview, dc: HDC) void {
+    fn paintCard(self: *ThumbnailAdapter, dc: HDC) void {
         if (dc == null) return;
         const window = self.hwnd orelse return;
         var client = Rect{ .left = 0, .top = 0, .right = 0, .bottom = 0 };
@@ -402,7 +340,7 @@ fn windowProc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) callc
             const dc = BeginPaint(window, &paint);
             const value = GetWindowLongPtrW(window, gwlp_userdata);
             if (value != 0) {
-                const self: *ThumbnailPreview = @ptrFromInt(@as(usize, @bitCast(value)));
+                const self: *ThumbnailAdapter = @ptrFromInt(@as(usize, @bitCast(value)));
                 self.paintCard(dc);
             }
             _ = EndPaint(window, &paint);
@@ -414,25 +352,9 @@ fn windowProc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) callc
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
-pub fn smokeCheck() bool {
-    const icon = Rect{ .left = 900, .top = 20, .right = 924, .bottom = 44 };
-    const monitor = Rect{ .left = 0, .top = 0, .right = 1920, .bottom = 1080 };
-    const preview = thumbnailBoxFor(1920, 1080, icon, monitor, 1);
-    if (!preview.valid) return false;
-    if (preview.card.right - preview.card.left != 276 or preview.card.bottom - preview.card.top != 198) return false;
-    const image_width = preview.picture.right - preview.picture.left;
-    const image_height = preview.picture.bottom - preview.picture.top;
-    if (@abs(@as(f32, @floatFromInt(image_width)) / @as(f32, @floatFromInt(image_height)) - 16.0 / 9.0) > 0.02) return false;
-    if (preview.card.left < monitor.left or preview.card.right > monitor.right) return false;
-    const edge = thumbnailBoxFor(1, 9000, .{ .left = 0, .top = 0, .right = 16, .bottom = 20 }, monitor, 1);
-    if (!edge.valid or edge.picture.right <= edge.picture.left) return false;
-    const invalid_scale = thumbnailBoxFor(640, 480, icon, monitor, 0);
-    return invalid_scale.valid;
-}
-
 comptime {
     if (false) {
-        var preview = ThumbnailPreview{};
+        var preview = ThumbnailAdapter{};
         _ = preview.create(null);
         _ = preview.begin(null);
         _ = preview.place(&ThumbnailPlacement{});

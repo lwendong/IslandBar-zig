@@ -1,5 +1,6 @@
 const std = @import("std");
 const Monitor = @import("Monitor");
+const TaskbarCatalog = @import("TaskbarCatalog");
 
 pub const max_task_windows = 32;
 pub const title_capacity = 128;
@@ -23,11 +24,12 @@ pub const WindowTraits = struct {
 };
 
 pub const TaskEntry = struct {
+    id: TaskbarCatalog.WindowId = 0,
     handle: HWND = null,
     process_id: DWORD = 0,
+    process_created_at: u64 = 0,
     iconic: bool = false,
     title: [title_capacity]u16 = @splat(0),
-    mark: u64 = 0,
 };
 
 pub fn shouldListWindow(traits: WindowTraits) bool {
@@ -71,6 +73,9 @@ extern "user32" fn GetWindowTextW(window: HWND, title: [*]u16, max_count: i32) c
 extern "user32" fn GetWindowRect(window: HWND, rect: *Monitor.Rect) callconv(.winapi) BOOL;
 extern "user32" fn GetWindowThreadProcessId(window: HWND, process_id: *DWORD) callconv(.winapi) DWORD;
 extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) DWORD;
+extern "kernel32" fn OpenProcess(access: DWORD, inherit: BOOL, process_id: DWORD) callconv(.winapi) ?*anyopaque;
+extern "kernel32" fn CloseHandle(handle: ?*anyopaque) callconv(.winapi) BOOL;
+extern "kernel32" fn GetProcessTimes(process: ?*anyopaque, created: *FileTime, exited: *FileTime, kernel: *FileTime, user: *FileTime) callconv(.winapi) BOOL;
 extern "user32" fn EnumWindows(callback: *const fn (HWND, LPARAM) callconv(.winapi) BOOL, parameter: LPARAM) callconv(.winapi) BOOL;
 extern "user32" fn GetForegroundWindow() callconv(.winapi) HWND;
 extern "user32" fn IsWindow(window: HWND) callconv(.winapi) BOOL;
@@ -85,6 +90,8 @@ extern "user32" fn AttachThreadInput(from_thread: DWORD, to_thread: DWORD, attac
 extern "user32" fn BringWindowToTop(window: HWND) callconv(.winapi) BOOL;
 
 const UINT = u32;
+const FileTime = extern struct { low: DWORD, high: DWORD };
+const process_query_limited_information: DWORD = 0x1000;
 const dwm_attribute_cloaked: DWORD = 14;
 const exstyle_index: i32 = -20;
 const ex_tool_window: isize = 0x80;
@@ -179,7 +186,6 @@ fn enumProc(window: HWND, parameter: LPARAM) callconv(.winapi) BOOL {
         .process_id = process_id,
         .iconic = traits.iconic,
         .title = title,
-        .mark = process_id,
     };
     context.listed += 1;
     return 1;
@@ -206,48 +212,56 @@ pub const WindowList = struct {
     foreground: HWND = null,
     total_seen: usize = 0,
     summary: [192]u16 = @splat(0),
-    order: [max_task_windows]HWND = @splat(null),
-    order_count: usize = 0,
+    revision: u64 = 0,
+    next_window_id: TaskbarCatalog.WindowId = 1,
 
     pub fn refresh(self: *WindowList) usize {
-        var context = EnumContext{ .self_process_id = GetCurrentProcessId(), .entries = &self.entries };
+        const previous_entries = self.entries;
+        const previous_count = self.count;
+        const previous_foreground = self.foreground;
+        var enumerated: [max_task_windows]TaskEntry = @splat(.{});
+        var context = EnumContext{ .self_process_id = GetCurrentProcessId(), .entries = &enumerated };
         self.total_seen = 0;
         self.foreground = GetForegroundWindow();
         _ = EnumWindows(enumProc, @intCast(@intFromPtr(&context)));
         const listed = context.listed;
-        var next: [max_task_windows]HWND = @splat(null);
+        for (enumerated[0..listed]) |*entry| {
+            entry.process_created_at = processCreatedAt(entry.process_id) orelse 0;
+            for (previous_entries[0..previous_count]) |previous| {
+                if (!sameWindowInstance(previous, entry.*)) continue;
+                entry.id = previous.id;
+                break;
+            }
+            if (entry.id == 0) {
+                entry.id = self.next_window_id;
+                self.next_window_id +%= 1;
+                if (self.next_window_id == 0) self.next_window_id = 1;
+            }
+        }
+        var next: [max_task_windows]TaskEntry = @splat(.{});
         var next_count: usize = 0;
-        for (self.order[0..self.order_count]) |previous| {
-            if (next_count >= max_task_windows) break;
-            for (self.entries[0..listed]) |entry| if (entry.handle == previous) {
-                next[next_count] = previous;
+        for (previous_entries[0..previous_count]) |previous| {
+            for (enumerated[0..listed]) |entry| if (entry.id == previous.id) {
+                next[next_count] = entry;
                 next_count += 1;
                 break;
             };
         }
-        for (self.entries[0..listed]) |entry| {
+        for (enumerated[0..listed]) |entry| {
             if (next_count >= max_task_windows) break;
             var exists = false;
-            for (next[0..next_count]) |handle| if (handle == entry.handle) {
+            for (next[0..next_count]) |prior| if (prior.id == entry.id) {
                 exists = true;
                 break;
             };
             if (!exists) {
-                next[next_count] = entry.handle;
+                next[next_count] = entry;
                 next_count += 1;
             }
         }
-        self.order = next;
-        self.order_count = next_count;
-        var stable: [max_task_windows]TaskEntry = @splat(.{});
-        for (next[0..next_count], 0..) |handle, index| {
-            for (self.entries[0..listed]) |entry| if (entry.handle == handle) {
-                stable[index] = entry;
-                break;
-            };
-        }
-        self.entries = stable;
-        self.count = @min(self.order_count, listed);
+        self.entries = next;
+        self.count = next_count;
+        if (!sameCatalog(previous_entries[0..previous_count], self.entries[0..self.count], previous_foreground, self.foreground)) self.revision +%= 1;
         const skipped = context.cloaked_skipped + context.untitled_skipped + context.owned_skipped + context.tool_skipped + context.shell_skipped + context.self_skipped + context.invisible_skipped;
         self.total_seen = listed + skipped;
         formatSummary(&self.summary, "{d} listed of {d}: {d} invisible, {d} cloaked, {d} untitled, {d} owned, {d} tool, {d} shell, {d} self", .{
@@ -256,6 +270,56 @@ pub const WindowList = struct {
             context.self_skipped,
         });
         return self.count;
+    }
+
+    pub fn snapshot(self: *const WindowList, output: *TaskbarCatalog.Snapshot) void {
+        output.* = .{ .count = self.count, .revision = self.revision };
+        for (self.entries[0..self.count], 0..) |entry, index| {
+            output.entries[index] = .{
+                .id = entry.id,
+                .process_id = entry.process_id,
+                .process_created_at = entry.process_created_at,
+                .iconic = entry.iconic,
+                .title = entry.title,
+            };
+            if (entry.handle == self.foreground) output.foreground_id = entry.id;
+        }
+    }
+
+    pub fn activateIdentity(self: *WindowList, request: TaskbarCatalog.Request) bool {
+        const entry = self.findEntry(request.id) orelse return false;
+        if (request.catalog_revision != self.revision or !self.identityIsCurrent(entry)) return false;
+        return self.activate(entry.handle);
+    }
+
+    pub fn minimizeIdentity(self: *WindowList, request: TaskbarCatalog.Request) bool {
+        const entry = self.findEntry(request.id) orelse return false;
+        if (request.catalog_revision != self.revision or !self.identityIsCurrent(entry)) return false;
+        return self.minimize(entry.handle);
+    }
+
+    /// Returns a live HWND only while the exact catalog revision and process
+    /// instance are still current. Thumbnail consumers must not keep stale
+    /// window handles across catalog refreshes.
+    pub fn handleForIdentity(self: *const WindowList, request: TaskbarCatalog.Request) ?HWND {
+        if (request.catalog_revision != self.revision) return null;
+        const entry = self.findEntry(request.id) orelse return null;
+        if (!self.identityIsCurrent(entry)) return null;
+        return entry.handle;
+    }
+
+    fn findEntry(self: *const WindowList, id: TaskbarCatalog.WindowId) ?*const TaskEntry {
+        for (self.entries[0..self.count]) |*entry| if (entry.id == id) return entry;
+        return null;
+    }
+
+    fn identityIsCurrent(self: *const WindowList, entry: *const TaskEntry) bool {
+        _ = self;
+        if (entry.handle == null or IsWindow(entry.handle) == 0 or entry.process_created_at == 0) return false;
+        var current_pid: DWORD = 0;
+        _ = GetWindowThreadProcessId(entry.handle, &current_pid);
+        if (current_pid != entry.process_id) return false;
+        return (processCreatedAt(current_pid) orelse return false) == entry.process_created_at;
     }
 
     pub fn activate(self: *WindowList, window: HWND) bool {
@@ -289,6 +353,31 @@ pub const WindowList = struct {
         return IsIconic(window) != 0;
     }
 };
+
+fn processCreatedAt(process_id: DWORD) ?u64 {
+    if (process_id == 0) return null;
+    const process = OpenProcess(process_query_limited_information, 0, process_id) orelse return null;
+    defer _ = CloseHandle(process);
+    var created = FileTime{ .low = 0, .high = 0 };
+    var exited = FileTime{ .low = 0, .high = 0 };
+    var kernel = FileTime{ .low = 0, .high = 0 };
+    var user = FileTime{ .low = 0, .high = 0 };
+    if (GetProcessTimes(process, &created, &exited, &kernel, &user) == 0) return null;
+    return (@as(u64, created.high) << 32) | created.low;
+}
+
+fn sameWindowInstance(a: TaskEntry, b: TaskEntry) bool {
+    return a.id != 0 and a.process_created_at != 0 and a.handle == b.handle and
+        a.process_id == b.process_id and a.process_created_at == b.process_created_at;
+}
+
+fn sameCatalog(old: []const TaskEntry, current: []const TaskEntry, old_foreground: HWND, current_foreground: HWND) bool {
+    if (old_foreground != current_foreground or old.len != current.len) return false;
+    for (old, current) |a, b| {
+        if (a.id != b.id or a.iconic != b.iconic or !std.mem.eql(u16, &a.title, &b.title)) return false;
+    }
+    return true;
+}
 
 fn requestRestore(window: HWND) void {
     var ignored: usize = 0;
@@ -328,4 +417,12 @@ pub fn smokeCheck() bool {
         _ = list.minimize(null);
     }
     return true;
+}
+
+test "taskbar window identity includes HWND, PID and process creation time" {
+    const first = TaskEntry{ .id = 1, .handle = @ptrFromInt(10), .process_id = 7, .process_created_at = 100 };
+    try std.testing.expect(sameWindowInstance(first, first));
+    try std.testing.expect(!sameWindowInstance(first, .{ .id = 2, .handle = @ptrFromInt(10), .process_id = 8, .process_created_at = 100 }));
+    try std.testing.expect(!sameWindowInstance(first, .{ .id = 2, .handle = @ptrFromInt(10), .process_id = 7, .process_created_at = 101 }));
+    try std.testing.expect(!sameWindowInstance(first, .{ .id = 2, .handle = @ptrFromInt(11), .process_id = 7, .process_created_at = 100 }));
 }

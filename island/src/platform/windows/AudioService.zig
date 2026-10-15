@@ -1,61 +1,22 @@
 const std = @import("std");
 const Log = @import("Log");
-const MusicSession = @import("MusicSession");
+const AppIcon = @import("AppIcon");
+const SoundAudio = @import("SoundAudio");
 
-pub const max_devices: usize = 8;
-pub const max_sessions: usize = 10;
-pub const icon_bytes: usize = 4096;
+pub const max_devices = SoundAudio.max_devices;
+pub const max_sessions = SoundAudio.max_sessions;
+pub const icon_bytes = SoundAudio.icon_bytes;
+pub const SoundDeviceInfo = SoundAudio.DeviceInfo;
+pub const SoundSessionInfo = SoundAudio.SessionInfo;
+pub const Snapshot = SoundAudio.Snapshot;
 pub const icon_cache_entries: usize = 12;
 
 const IconEntry = struct {
     pid: u32 = 0,
+    executable: [260]u16 = @splat(0),
     revision: u64 = 0,
     size: usize = 0,
     bytes: [icon_bytes]u8 = @splat(0),
-};
-
-pub const SoundDeviceInfo = struct {
-    name: [128]u16 = @splat(0),
-    id: [256]u16 = @splat(0),
-    form_factor: i32 = 0,
-    is_default: bool = false,
-};
-pub const SoundSessionInfo = struct {
-    name: [128]u16 = @splat(0),
-    source: [260]u16 = @splat(0),
-    pid: u32 = 0,
-    volume: f32 = 1,
-    active: bool = false,
-    system: bool = false,
-    has_icon: bool = false,
-    icon_revision: u64 = 0,
-    icon: [icon_bytes]u8 = @splat(0),
-    icon_size: usize = 0,
-};
-pub const Snapshot = struct {
-    devices: [max_devices]SoundDeviceInfo = @splat(.{}),
-    device_count: usize = 0,
-    default_device: ?usize = null,
-    default_device_name: [128]u16 = @splat(0),
-    sessions: [max_sessions]SoundSessionInfo = @splat(.{}),
-    session_count: usize = 0,
-    revision: u64 = 0,
-
-    pub fn normalize(self: *Snapshot) void {
-        self.device_count = @min(self.device_count, max_devices);
-        self.session_count = @min(self.session_count, max_sessions);
-        if (self.default_device) |index| if (index >= self.device_count) {
-            self.default_device = null;
-        };
-        for (self.sessions[0..self.session_count]) |*session| session.volume = clamp01(session.volume);
-    }
-
-    pub fn sessionIndexForPid(self: *const Snapshot, pid: u32) ?usize {
-        for (self.sessions[0..@min(self.session_count, max_sessions)], 0..) |session, index| {
-            if (session.pid == pid) return index;
-        }
-        return null;
-    }
 };
 
 const BOOL = i32;
@@ -72,7 +33,7 @@ const wait_object_0: DWORD = 0;
 const wait_timeout: DWORD = 258;
 const wait_failed: DWORD = 0xFFFFFFFF;
 const infinite: DWORD = 0xFFFFFFFF;
-const rpc_e_changed_mode: HRESULT = -2147417850;
+const hresult_not_found: HRESULT = @bitCast(@as(u32, 0x80070490));
 
 const Guid = extern struct { data1: u32, data2: u16, data3: u16, data4: [8]u8 };
 const CriticalSection = extern struct {
@@ -213,7 +174,8 @@ extern "kernel32" fn LeaveCriticalSection(section: *CriticalSection) callconv(.w
 extern "kernel32" fn OpenProcess(access: DWORD, inherit: BOOL, pid: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn QueryFullProcessImageNameW(process: HANDLE, flags: DWORD, path: [*]u16, length: *DWORD) callconv(.winapi) BOOL;
 
-pub const SoundOutput = struct {
+pub const AudioService = struct {
+    app_icon_fetch: AppIcon.FetchPngFn = AppIcon.unavailable,
     stop_event: HANDLE = null,
     work_event: HANDLE = null,
     thread: HANDLE = null,
@@ -225,15 +187,19 @@ pub const SoundOutput = struct {
     have_reading: bool = false,
     pending_pid: u32 = 0,
     pending_level: f32 = 0,
+    pending_volume_token: u64 = 0,
     pending_volume: bool = false,
     pending_device: [256]u16 = @splat(0),
+    pending_device_token: u64 = 0,
     pending_default_device: bool = false,
+    volume_result: ?SoundAudio.OperationResult = null,
+    device_result: ?SoundAudio.OperationResult = null,
     refresh_requested: bool = false,
     icons: [icon_cache_entries]IconEntry = @splat(.{}),
     icon_count: usize = 0,
     next_icon_revision: u64 = 1,
 
-    pub fn start(self: *SoundOutput) bool {
+    pub fn start(self: *AudioService) bool {
         if (@atomicLoad(u8, &self.running, .acquire) != 0) return true;
         InitializeCriticalSection(&self.lock);
         self.lock_ready = true;
@@ -258,7 +224,7 @@ pub const SoundOutput = struct {
         return true;
     }
 
-    pub fn stop(self: *SoundOutput) void {
+    pub fn stop(self: *AudioService) void {
         if (self.stop_event) |event| _ = SetEvent(event);
         if (self.thread) |thread| {
             _ = WaitForSingleObject(thread, 3000);
@@ -274,18 +240,18 @@ pub const SoundOutput = struct {
         @atomicStore(u8, &self.running, 0, .release);
     }
 
-    pub fn snapshot(self: *SoundOutput) Snapshot {
+    pub fn snapshot(self: *AudioService) Snapshot {
         if (!self.lock_ready) return .{};
         EnterCriticalSection(&self.lock);
         defer LeaveCriticalSection(&self.lock);
         return self.snapshot_value;
     }
 
-    pub fn revision(self: *SoundOutput) u64 {
+    pub fn revision(self: *AudioService) u64 {
         return @intCast(@max(0, @atomicLoad(i32, &self.revision_value, .acquire)));
     }
 
-    pub fn refresh(self: *SoundOutput) void {
+    pub fn refresh(self: *AudioService) void {
         if (!self.lock_ready) return;
         EnterCriticalSection(&self.lock);
         self.refresh_requested = true;
@@ -293,38 +259,65 @@ pub const SoundOutput = struct {
         if (self.work_event) |event| _ = SetEvent(event);
     }
 
-    pub fn setSessionVolume(self: *SoundOutput, pid: u32, level: f32) void {
-        if (!self.lock_ready) return;
+    pub fn setSessionVolume(self: *AudioService, pid: u32, level: f32) void {
+        _ = self.setSessionVolumeWithToken(pid, level, 0);
+    }
+
+    pub fn setSessionVolumeWithToken(self: *AudioService, pid: u32, level: f32, token: u64) bool {
+        if (!self.lock_ready) return false;
         EnterCriticalSection(&self.lock);
         self.pending_pid = pid;
         self.pending_level = clamp01(level);
+        self.pending_volume_token = token;
         self.pending_volume = true;
         LeaveCriticalSection(&self.lock);
         if (self.work_event) |event| _ = SetEvent(event);
+        return true;
     }
 
-    pub fn setDefaultDevice(self: *SoundOutput, device_id: []const u16) void {
-        if (!self.lock_ready or device_id.len == 0) return;
+    pub fn setDefaultDevice(self: *AudioService, device_id: []const u16) void {
+        _ = self.setDefaultDeviceWithToken(device_id, 0);
+    }
+
+    pub fn setDefaultDeviceWithToken(self: *AudioService, device_id: []const u16, token: u64) bool {
+        if (!self.lock_ready or device_id.len == 0) return false;
         self.enter();
         self.pending_device = @splat(0);
         const source = cWide(device_id);
         const length = @min(source.len, self.pending_device.len - 1);
         @memcpy(self.pending_device[0..length], source[0..length]);
+        self.pending_device_token = token;
         self.pending_default_device = true;
         self.leave();
         if (self.work_event) |event| _ = SetEvent(event);
+        return true;
     }
 
-    fn hasReading(self: *SoundOutput) bool {
+    pub fn takeResult(self: *AudioService) ?SoundAudio.OperationResult {
+        if (!self.lock_ready) return null;
+        self.enter();
+        defer self.leave();
+        if (self.device_result) |result| {
+            self.device_result = null;
+            return result;
+        }
+        if (self.volume_result) |result| {
+            self.volume_result = null;
+            return result;
+        }
+        return null;
+    }
+
+    fn hasReading(self: *AudioService) bool {
         if (!self.lock_ready) return false;
         EnterCriticalSection(&self.lock);
         defer LeaveCriticalSection(&self.lock);
         return self.have_reading;
     }
 
-    fn run(self: *SoundOutput) void {
+    fn run(self: *AudioService) void {
         const hr = CoInitializeEx(null, 0);
-        const apartment = hr >= 0 or hr == rpc_e_changed_mode;
+        const apartment = hr >= 0;
         if (apartment) self.readAll();
         while (true) {
             const stop_handle = self.stop_event orelse break;
@@ -347,7 +340,7 @@ pub const SoundOutput = struct {
         @atomicStore(u8, &self.running, 0, .release);
     }
 
-    fn readAll(self: *SoundOutput) void {
+    fn readAll(self: *AudioService) void {
         var fresh = Snapshot{};
         const devices_ok = readDevices(&fresh);
         const sessions_ok = readSessions(self, &fresh);
@@ -365,13 +358,15 @@ pub const SoundOutput = struct {
         }
     }
 
-    fn applyVolume(self: *SoundOutput) void {
+    fn applyVolume(self: *AudioService) void {
         self.enter();
         const do_write = self.pending_volume;
         const pid = self.pending_pid;
         const level = self.pending_level;
+        const volume_token = self.pending_volume_token;
         const do_default = self.pending_default_device;
         const device_id = self.pending_device;
+        const device_token = self.pending_device_token;
         self.pending_volume = false;
         self.pending_default_device = false;
         self.refresh_requested = false;
@@ -384,51 +379,81 @@ pub const SoundOutput = struct {
                 @as(u32, @bitCast(result)),
             }) catch "default audio device switch failed";
             Log.logLine(line);
+            self.publishResult(.{ .token = device_token, .operation = .default_device, .hresult = result }, null);
         }
-        if (!do_write) return;
+        if (do_write) self.publishResult(.{ .token = volume_token, .operation = .session_volume, .hresult = self.writeSessionVolume(pid, level) }, null);
+    }
 
-        const enumerator = createEnumerator() orelse return;
+    fn writeSessionVolume(_: *AudioService, pid: u32, level: f32) HRESULT {
+        var last_hr: HRESULT = @bitCast(@as(u32, 0x80004005));
+        var create_hr: HRESULT = 0;
+        const enumerator = createEnumeratorWithResult(&create_hr) orelse return create_hr;
         defer release(enumerator);
         var device: ?*anyopaque = null;
-        if (!succeeded(vt(DeviceEnumeratorVTable, enumerator).get_default_audio_endpoint(enumerator, e_render, e_console, &device))) return;
+        last_hr = vt(DeviceEnumeratorVTable, enumerator).get_default_audio_endpoint(enumerator, e_render, e_console, &device);
+        if (!succeeded(last_hr) or device == null) return if (!succeeded(last_hr)) last_hr else hresult_not_found;
         defer release(device);
         var manager: ?*anyopaque = null;
-        if (!succeeded(vt(DeviceVTable, device).activate(device.?, &iid_session_manager2, CLSCTX_ALL, null, &manager))) return;
+        last_hr = vt(DeviceVTable, device).activate(device.?, &iid_session_manager2, CLSCTX_ALL, null, &manager);
+        if (!succeeded(last_hr) or manager == null) return if (!succeeded(last_hr)) last_hr else hresult_not_found;
         defer release(manager);
         var sessions: ?*anyopaque = null;
-        if (!succeeded(vt(SessionManagerVTable, manager).get_session_enumerator(manager.?, &sessions))) return;
+        last_hr = vt(SessionManagerVTable, manager).get_session_enumerator(manager.?, &sessions);
+        if (!succeeded(last_hr) or sessions == null) return if (!succeeded(last_hr)) last_hr else hresult_not_found;
         defer release(sessions);
         var count: i32 = 0;
-        if (!succeeded(vt(SessionEnumeratorVTable, sessions).get_count(sessions.?, &count))) return;
+        last_hr = vt(SessionEnumeratorVTable, sessions).get_count(sessions.?, &count);
+        if (!succeeded(last_hr)) return last_hr;
         var i: i32 = 0;
         while (i < count) : (i += 1) {
             var control: ?*anyopaque = null;
-            if (!succeeded(vt(SessionEnumeratorVTable, sessions).get_session(sessions.?, i, &control))) continue;
+            const session_hr = vt(SessionEnumeratorVTable, sessions).get_session(sessions.?, i, &control);
+            if (!succeeded(session_hr) or control == null) {
+                last_hr = session_hr;
+                continue;
+            }
             defer release(control);
             var control2: ?*anyopaque = null;
-            if (!succeeded(queryInterface(control, &iid_session_control2, &control2))) continue;
+            const query_hr = queryInterface(control, &iid_session_control2, &control2);
+            if (!succeeded(query_hr) or control2 == null) {
+                last_hr = query_hr;
+                continue;
+            }
             var session_pid: DWORD = 0;
-            _ = vt(SessionControl2VTable, control2).get_process_id(control2.?, &session_pid);
+            const pid_hr = vt(SessionControl2VTable, control2).get_process_id(control2.?, &session_pid);
             release(control2);
+            if (!succeeded(pid_hr)) {
+                last_hr = pid_hr;
+                continue;
+            }
             if (session_pid != pid) continue;
             var volume: ?*anyopaque = null;
-            if (!succeeded(queryInterface(control, &iid_simple_audio_volume, &volume))) continue;
-            _ = vt(SimpleVolumeVTable, volume).set_master_volume(volume.?, level, null);
+            const volume_hr = queryInterface(control, &iid_simple_audio_volume, &volume);
+            if (!succeeded(volume_hr) or volume == null) return volume_hr;
+            const write_hr = vt(SimpleVolumeVTable, volume).set_master_volume(volume.?, level, null);
             release(volume);
-            break;
+            return write_hr;
         }
+        return hresult_not_found;
     }
 
-    fn enter(self: *SoundOutput) void {
+    fn publishResult(self: *AudioService, device: ?SoundAudio.OperationResult, volume: ?SoundAudio.OperationResult) void {
+        self.enter();
+        if (device) |result| self.device_result = result;
+        if (volume) |result| self.volume_result = result;
+        self.leave();
+    }
+
+    fn enter(self: *AudioService) void {
         EnterCriticalSection(&self.lock);
     }
-    fn leave(self: *SoundOutput) void {
+    fn leave(self: *AudioService) void {
         LeaveCriticalSection(&self.lock);
     }
 };
 
 fn threadEntry(parameter: ?*anyopaque) callconv(.winapi) DWORD {
-    const self: *SoundOutput = @ptrCast(@alignCast(parameter orelse return 1));
+    const self: *AudioService = @ptrCast(@alignCast(parameter orelse return 1));
     self.run();
     return 0;
 }
@@ -485,7 +510,7 @@ fn readDevices(out: *Snapshot) bool {
     return out.device_count > 0;
 }
 
-fn readSessions(self: *SoundOutput, out: *Snapshot) bool {
+fn readSessions(self: *AudioService, out: *Snapshot) bool {
     const enumerator = createEnumerator() orelse return false;
     defer release(enumerator);
     var device: ?*anyopaque = null;
@@ -550,29 +575,51 @@ fn readSessions(self: *SoundOutput, out: *Snapshot) bool {
 
 /// Icons are decoded on the audio worker, then copied into the immutable
 /// snapshot. The renderer can keep its uploaded bitmap by comparing revisions.
-fn iconForPid(self: *SoundOutput, pid: u32, executable: []const u16, output: []u8, written: *usize, revision: *u64) bool {
+fn iconForPid(self: *AudioService, pid: u32, executable: []const u16, output: []u8, written: *usize, revision: *u64) bool {
     if (pid == 0 or output.len < icon_bytes) return false;
+    const executable_path = cWide(executable);
+    if (executable_path.len == 0 or executable_path.len >= 260) return false;
+    var target: ?*IconEntry = null;
     for (self.icons[0..self.icon_count]) |*entry| {
         if (entry.pid != pid) continue;
-        @memcpy(output[0..entry.size], entry.bytes[0..entry.size]);
-        written.* = entry.size;
-        revision.* = entry.revision;
-        return entry.size > 0;
+        target = entry;
+        if (sameExecutablePath(&entry.executable, executable_path) and entry.size > 0) {
+            @memcpy(output[0..entry.size], entry.bytes[0..entry.size]);
+            written.* = entry.size;
+            revision.* = entry.revision;
+            return true;
+        }
+        break;
     }
-    if (executable.len == 0 or executable[0] == 0 or self.icon_count >= self.icons.len) return false;
+    if (target == null) {
+        const index = @min(self.icon_count, self.icons.len - 1);
+        target = &self.icons[index];
+        // Keep the last slot as the replacement slot, as in the existing cache.
+        if (index + 1 < self.icons.len) self.icon_count += 1;
+    }
 
-    var entry = &self.icons[self.icon_count];
+    const entry = target.?;
     entry.pid = pid;
+    @memset(&entry.executable, 0);
+    @memcpy(entry.executable[0..executable_path.len], executable_path);
     entry.revision = self.next_icon_revision;
     self.next_icon_revision +%= 1;
-    entry.size = MusicSession.fetchAppIconForTest(executable, &entry.bytes);
-    // Preserve the original cache growth rule: its last slot is a replacement
-    // slot once the cache reaches its configured limit.
-    if (self.icon_count + 1 < icon_cache_entries) self.icon_count += 1;
+    entry.size = self.app_icon_fetch(executable_path, &entry.bytes);
     if (entry.size == 0) return false;
     @memcpy(output[0..entry.size], entry.bytes[0..entry.size]);
     written.* = entry.size;
     revision.* = entry.revision;
+    return true;
+}
+
+fn sameExecutablePath(cached: *const [260]u16, requested: []const u16) bool {
+    const existing = cWide(cached);
+    if (existing.len != requested.len) return false;
+    for (existing, requested) |left, right| {
+        const lower_left = if (left >= 'A' and left <= 'Z') left + ('a' - 'A') else left;
+        const lower_right = if (right >= 'A' and right <= 'Z') right + ('a' - 'A') else right;
+        if (lower_left != lower_right) return false;
+    }
     return true;
 }
 
@@ -593,8 +640,14 @@ fn applyDefaultDevice(device: *const [256]u16) HRESULT {
 }
 
 fn createEnumerator() ?*anyopaque {
+    var hr: HRESULT = 0;
+    return createEnumeratorWithResult(&hr);
+}
+
+fn createEnumeratorWithResult(out_hr: *HRESULT) ?*anyopaque {
     var result: ?*anyopaque = null;
-    if (!succeeded(CoCreateInstance(&clsid_mm_device_enumerator, null, CLSCTX_ALL, &iid_mm_device_enumerator, &result))) return null;
+    out_hr.* = CoCreateInstance(&clsid_mm_device_enumerator, null, CLSCTX_ALL, &iid_mm_device_enumerator, &result);
+    if (!succeeded(out_hr.*)) return null;
     return result;
 }
 
@@ -692,6 +745,29 @@ pub fn clamp01(value: f32) f32 {
     return @max(0, @min(1, value));
 }
 
+fn testIconFetch(executable: []const u16, output: []u8) usize {
+    if (executable.len == 0 or output.len == 0) return 0;
+    output[0] = @intCast(executable[0] & 0xff);
+    return 1;
+}
+
+test "icon cache refreshes when a process id is reused for another executable" {
+    var service = AudioService{ .app_icon_fetch = testIconFetch };
+    var output: [icon_bytes]u8 = undefined;
+    var written: usize = 0;
+    var revision: u64 = 0;
+
+    try std.testing.expect(iconForPid(&service, 77, &.{ 'A', 0 }, &output, &written, &revision));
+    const first_revision = revision;
+    try std.testing.expectEqual(@as(u8, 'A'), output[0]);
+    try std.testing.expect(iconForPid(&service, 77, &.{ 'a', 0 }, &output, &written, &revision));
+    try std.testing.expectEqual(first_revision, revision);
+    try std.testing.expect(iconForPid(&service, 77, &.{ 'B', 0 }, &output, &written, &revision));
+    try std.testing.expect(revision != first_revision);
+    try std.testing.expectEqual(@as(u8, 'B'), output[0]);
+    try std.testing.expectEqual(@as(usize, 1), service.icon_count);
+}
+
 pub fn smokeCheck() bool {
     var snapshot = Snapshot{};
     snapshot.device_count = max_devices + 1;
@@ -699,7 +775,7 @@ pub fn smokeCheck() bool {
     snapshot.sessions[0].pid = 42;
     snapshot.sessions[0].volume = 2;
     snapshot.normalize();
-    var service = SoundOutput{};
+    var service = AudioService{};
     if (false) {
         _ = service.start();
         service.stop();

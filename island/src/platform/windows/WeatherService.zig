@@ -1,5 +1,6 @@
 const std = @import("std");
 const Log = @import("Log");
+const WeatherData = @import("WeatherData");
 
 const HANDLE = ?*anyopaque;
 const DWORD = u32;
@@ -24,6 +25,7 @@ extern "kernel32" fn CreateEventW(attributes: ?*anyopaque, manual_reset: BOOL, i
 extern "kernel32" fn SetEvent(event: HANDLE) callconv(.winapi) BOOL;
 extern "kernel32" fn WaitForSingleObject(handle: HANDLE, milliseconds: DWORD) callconv(.winapi) DWORD;
 extern "kernel32" fn Sleep(milliseconds: DWORD) callconv(.winapi) void;
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "kernel32" fn CreateThread(attributes: ?*anyopaque, stack_size: usize, entry: *const fn (?*anyopaque) callconv(.winapi) DWORD, parameter: ?*anyopaque, flags: DWORD, thread_id: ?*DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn InitializeCriticalSection(section: *CriticalSection) callconv(.winapi) void;
 extern "kernel32" fn DeleteCriticalSection(section: *CriticalSection) callconv(.winapi) void;
@@ -63,92 +65,7 @@ const forecast_host: [*:0]const u16 = &.{ 'a', 'p', 'i', '.', 'o', 'p', 'e', 'n'
 const http_get: [*:0]const u16 = &.{ 'G', 'E', 'T', 0 };
 const wide_trim_chars = &[_]u16{ ' ', '\t', '\r' };
 
-pub const SkyMark = enum(i32) { none, sun, sun_cloud, cloud, fog, rain, snow, thunder };
-pub const Reading = struct { temperature_c: f64, weather_code: i32, valid: bool = false };
-
-pub fn weatherWordForCode(code: i32) ?[]const u16 {
-    return switch (code) {
-        0, 1 => &.{0x6674},
-        2 => &.{ 0x591A, 0x4E91 },
-        3 => &.{0x9634},
-        45, 48 => &.{0x96FE},
-        51, 53, 61 => &.{ 0x5C0F, 0x96E8 },
-        55, 63 => &.{ 0x4E2D, 0x96E8 },
-        56, 57, 66, 67 => &.{ 0x51BB, 0x96E8 },
-        65 => &.{ 0x5927, 0x96E8 },
-        71 => &.{ 0x5C0F, 0x96EA },
-        73 => &.{ 0x4E2D, 0x96EA },
-        75 => &.{ 0x5927, 0x96EA },
-        77 => &.{ 0x7C73, 0x96EA },
-        80, 81 => &.{ 0x9635, 0x96E8 },
-        82 => &.{ 0x5F3A, 0x9635, 0x96E8 },
-        85, 86 => &.{ 0x9635, 0x96EA },
-        95 => &.{ 0x96F7, 0x9635, 0x96E8 },
-        96, 99 => &.{ 0x51B0, 0x96F9 },
-        else => null,
-    };
-}
-
-pub fn skyMarkForCode(code: i32) SkyMark {
-    return switch (code) {
-        0, 1 => .sun,
-        2 => .sun_cloud,
-        3 => .cloud,
-        45, 48 => .fog,
-        51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82 => .rain,
-        71, 73, 75, 77, 85, 86 => .snow,
-        95, 96, 99 => .thunder,
-        else => .none,
-    };
-}
-
-/// Formats the same compact joined value as the C++ strip: a localized weather word (when known),
-/// one space, and the rounded temperature. Unknown WMO codes keep the temperature and omit the word.
-pub fn weatherLineFor(temperature_c: f64, code: i32, output: []u16) void {
-    if (output.len == 0) return;
-    output[0] = 0;
-    var cursor: usize = 0;
-    if (weatherWordForCode(code)) |word| {
-        appendWide(output, &cursor, word);
-        appendWideUnit(output, &cursor, ' ');
-    }
-    appendTemperature(output, &cursor, temperature_c);
-}
-
-/// Produces the sky word and temperature independently for the renderer's separately styled runs.
-pub fn weatherPiecesFor(temperature_c: f64, code: i32, sky: []u16, temperature: []u16) void {
-    if (sky.len != 0) sky[0] = 0;
-    if (temperature.len != 0) temperature[0] = 0;
-    if (sky.len != 0) {
-        if (weatherWordForCode(code)) |word| {
-            var cursor: usize = 0;
-            appendWide(sky, &cursor, word);
-        }
-    }
-    if (temperature.len != 0) {
-        var cursor: usize = 0;
-        appendTemperature(temperature, &cursor, temperature_c);
-    }
-}
-
-fn appendWide(output: []u16, cursor: *usize, text: []const u16) void {
-    for (text) |unit| appendWideUnit(output, cursor, unit);
-}
-
-fn appendWideUnit(output: []u16, cursor: *usize, unit: u16) void {
-    if (cursor.* + 1 >= output.len) return;
-    output[cursor.*] = unit;
-    cursor.* += 1;
-    output[cursor.*] = 0;
-}
-
-fn appendTemperature(output: []u16, cursor: *usize, temperature_c: f64) void {
-    const degrees: i32 = @intFromFloat(@round(temperature_c));
-    var digits: [16]u8 = undefined;
-    const text = std.fmt.bufPrint(&digits, "{d}", .{degrees}) catch return;
-    for (text) |byte| appendWideUnit(output, cursor, byte);
-    appendWideUnit(output, cursor, 0x00B0);
-}
+pub const Reading = WeatherData.Reading;
 
 pub fn percentEncodeUtf8(input: []const u8, output: []u8) usize {
     if (output.len == 0) return 0;
@@ -187,6 +104,7 @@ pub fn parseCurrentCsv(csv: []const u8) ?Reading {
     const code_text = std.mem.trim(u8, fields.next() orelse return null, " \t\r");
     const temperature = std.fmt.parseFloat(f64, temp_text) catch return null;
     const code = std.fmt.parseInt(i32, code_text, 10) catch return null;
+    if (!std.math.isFinite(temperature)) return null;
     return .{ .temperature_c = temperature, .weather_code = code, .valid = true };
 }
 
@@ -361,8 +279,10 @@ pub const WeatherReader = struct {
     have_reading: bool = false,
     temperature_c: f64 = 0,
     code: i32 = -1,
-    line: [64]u16 = @splat(0),
-    revision: i32 = 0,
+    revision: u64 = 0,
+    last_attempt_succeeded: bool = false,
+    last_success_ms: u64 = 0,
+    attempt_succeeded_this_run: bool = false,
     reported_no_location: bool = false,
 
     pub fn start(self: *WeatherReader) bool {
@@ -403,37 +323,17 @@ pub const WeatherReader = struct {
         }
     }
 
-    pub fn get(self: *WeatherReader, temperature: ?*f64, weather_code: ?*i32) bool {
-        if (!self.lock_ready) return false;
+    pub fn getSnapshot(self: *WeatherReader) ?WeatherData.SourceSnapshot {
+        if (!self.lock_ready) return null;
         EnterCriticalSection(&self.lock);
         defer LeaveCriticalSection(&self.lock);
-        if (!self.have_reading) return false;
-        if (temperature) |value| value.* = self.temperature_c;
-        if (weather_code) |value| value.* = self.code;
-        return true;
-    }
-
-    pub fn getLine(self: *WeatherReader, output: []u16) void {
-        if (output.len == 0) return;
-        output[0] = 0;
-        if (!self.lock_ready) return;
-        EnterCriticalSection(&self.lock);
-        defer LeaveCriticalSection(&self.lock);
-        if (!self.have_reading) return;
-        copyWideZ(output, &self.line);
-    }
-
-    pub fn getPieces(self: *WeatherReader, sky: []u16, temperature: []u16) void {
-        if (sky.len != 0) sky[0] = 0;
-        if (temperature.len != 0) temperature[0] = 0;
-        if (!self.lock_ready) return;
-        EnterCriticalSection(&self.lock);
-        defer LeaveCriticalSection(&self.lock);
-        if (self.have_reading) weatherPiecesFor(self.temperature_c, self.code, sky, temperature);
-    }
-
-    pub fn getRevision(self: *WeatherReader) u64 {
-        return @intCast(@max(0, @atomicLoad(i32, &self.revision, .seq_cst)));
+        return .{
+            .reading = .{ .temperature_c = self.temperature_c, .weather_code = self.code, .valid = self.have_reading },
+            .has_reading = self.have_reading,
+            .revision = self.revision,
+            .last_attempt_succeeded = self.last_attempt_succeeded,
+            .last_success_ms = self.last_success_ms,
+        };
     }
 
     fn threadEntry(parameter: ?*anyopaque) callconv(.winapi) DWORD {
@@ -469,6 +369,13 @@ pub const WeatherReader = struct {
     }
 
     fn refresh(self: *WeatherReader, resolved_city: *[128]u8, unresolved_city: *[256]u8, latitude: *f64, longitude: *f64, winrt_api: ?WinRtApi) DWORD {
+        self.attempt_succeeded_this_run = false;
+        const wait_ms = self.refreshAttempt(resolved_city, unresolved_city, latitude, longitude, winrt_api);
+        if (!self.attempt_succeeded_this_run) self.publishAttemptFailure();
+        return wait_ms;
+    }
+
+    fn refreshAttempt(self: *WeatherReader, resolved_city: *[128]u8, unresolved_city: *[256]u8, latitude: *f64, longitude: *f64, winrt_api: ?WinRtApi) DWORD {
         const settings = readSettings();
         if (!settings.has_value) {
             unresolved_city[0] = 0;
@@ -536,26 +443,39 @@ pub const WeatherReader = struct {
             return retry_interval_ms;
         };
 
-        EnterCriticalSection(&self.lock);
-        self.temperature_c = reading.temperature_c;
-        self.code = reading.weather_code;
-        weatherLineFor(reading.temperature_c, reading.weather_code, &self.line);
-        self.have_reading = true;
-        LeaveCriticalSection(&self.lock);
-        _ = @atomicRmw(i32, &self.revision, .Add, 1, .seq_cst);
+        if (settings.has_value) {
+            const current_settings = readSettings();
+            if (!current_settings.has_value or current_settings.coordinates != settings.coordinates or
+                !std.mem.eql(u16, std.mem.sliceTo(&current_settings.city, 0), std.mem.sliceTo(&settings.city, 0)))
+            {
+                Log.logAndPrint("weather: discarded response for changed settings\n");
+                return retry_interval_ms;
+            }
+        }
+        self.publishSuccess(reading);
         Log.logAndPrint("weather: current conditions updated\n");
         return poll_interval_ms;
     }
-};
 
-fn copyWideZ(destination: []u16, source: []const u16) void {
-    if (destination.len == 0) return;
-    var count: usize = 0;
-    while (count < source.len and source[count] != 0 and count + 1 < destination.len) : (count += 1) {
-        destination[count] = source[count];
+    fn publishSuccess(self: *WeatherReader, reading: Reading) void {
+        EnterCriticalSection(&self.lock);
+        self.temperature_c = reading.temperature_c;
+        self.code = reading.weather_code;
+        self.have_reading = true;
+        self.last_attempt_succeeded = true;
+        self.last_success_ms = GetTickCount64();
+        self.revision +%= 1;
+        LeaveCriticalSection(&self.lock);
+        self.attempt_succeeded_this_run = true;
     }
-    destination[count] = 0;
-}
+
+    fn publishAttemptFailure(self: *WeatherReader) void {
+        EnterCriticalSection(&self.lock);
+        self.last_attempt_succeeded = false;
+        self.revision +%= 1;
+        LeaveCriticalSection(&self.lock);
+    }
+};
 
 fn copyBytesZ(destination: []u8, source: []const u8) void {
     if (destination.len == 0) return;
@@ -708,8 +628,6 @@ fn locationFromWindows(api: *const WinRtApi, latitude: *f64, longitude: *f64, st
 }
 
 pub fn smokeCheck() bool {
-    if (skyMarkForCode(0) != .sun or skyMarkForCode(61) != .rain or skyMarkForCode(999) != .none) return false;
-    if (weatherWordForCode(95) == null or weatherWordForCode(999) != null) return false;
     var encoded: [32]u8 = undefined;
     const encoded_len = percentEncodeUtf8("Beijing \xE5\x8C\x97", &encoded);
     if (!std.mem.eql(u8, encoded[0..encoded_len], "Beijing%20%E5%8C%97")) return false;
@@ -718,16 +636,18 @@ pub fn smokeCheck() bool {
     const configured_point = parseCoordinates(&.{ '3', '9', '.', '9', '0', '4', '2', ',', ' ', '1', '1', '6', '.', '4', '0', '7', '4' }) orelse return false;
     if (configured_point.latitude != 39.9042 or configured_point.longitude != 116.4074) return false;
     if (parseCoordinates(&.{ '9', '1', ',', '0' }) != null or parseCoordinates(&.{ '0', ',', '1', '8', '1' }) != null) return false;
-    if (parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,broken,2\n") != null) return false;
-    var line: [32]u16 = @splat(0);
-    weatherLineFor(21.6, 0, &line);
-    if (!std.mem.eql(u16, line[0..5], &.{ 0x6674, ' ', '2', '2', 0x00B0 })) return false;
-    weatherLineFor(-1.2, 999, &line);
-    if (!std.mem.eql(u16, line[0..2], &.{ '-', '1' })) return false;
-    if (line[2] != 0x00B0) return false;
-    var sky: [16]u16 = @splat(0);
-    var temperature: [16]u16 = @splat(0);
-    weatherPiecesFor(-1.2, 61, &sky, &temperature);
     return reading.temperature_c == 21.4 and reading.weather_code == 2 and point.latitude == 39.9 and point.longitude == 116.4 and
-        std.mem.eql(u16, sky[0..2], &.{ 0x5C0F, 0x96E8 }) and std.mem.eql(u16, temperature[0..3], &.{ '-', '1', 0x00B0 });
+        parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,broken,2\n") == null and
+        parseCurrentCsv("time,temperature_2m\n2026-10-14T00:00,12.0\n") == null and
+        parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,nan,2\n") == null;
+}
+
+test "weather source parsing rejects missing and non-finite response fields" {
+    try std.testing.expect(parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,broken,2\n") == null);
+    try std.testing.expect(parseCurrentCsv("time,temperature_2m\n2026-10-14T00:00,12.0\n") == null);
+    try std.testing.expect(parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,nan,2\n") == null);
+    const reading = parseCurrentCsv("time,temperature_2m,weather_code\n2026-10-14T00:00,-1.2,61\n").?;
+    try std.testing.expect(reading.valid);
+    try std.testing.expectEqual(@as(f64, -1.2), reading.temperature_c);
+    try std.testing.expectEqual(@as(i32, 61), reading.weather_code);
 }

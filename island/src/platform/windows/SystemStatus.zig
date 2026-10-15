@@ -1,7 +1,7 @@
 const std = @import("std");
-const AudioVolume = @import("AudioVolume");
 const Log = @import("Log");
 const SystemToggles = @import("SystemToggles");
+const StatusContract = @import("SystemStatusContract");
 
 const HANDLE = ?*anyopaque;
 const DWORD = u32;
@@ -101,30 +101,9 @@ comptime {
     }
 }
 
-pub const SignalStrength = enum(i32) { none = 0, weak = 1, fair = 2, good = 3, excellent = 4 };
-pub const NetworkKind = enum(i32) { none = 0, disconnected = 1, connected = 2 };
-
-pub const SystemStatus = struct {
-    network: NetworkKind = .none,
-    signal: SignalStrength = .none,
-    signal_percent: i32 = 0,
-    ssid: [33]u16 = @splat(0),
-    wireless_radio_on: bool = true,
-    bluetooth_present: bool = false,
-    bluetooth_on: bool = false,
-    bluetooth_name: [248]u16 = @splat(0),
-    night_light_on: bool = false,
-    live_captions_on: bool = false,
-    muted: bool = false,
-    volume_percent: i32 = 0,
-    wifi_radio_on: bool = true,
-    battery_present: bool = false,
-    on_ac_power: bool = true,
-    battery_percent: i32 = 0,
-    battery_saver_on: bool = false,
-    input_language_id: u16 = 0,
-    age_ms: u64 = 0,
-};
+pub const SignalStrength = StatusContract.SignalStrength;
+pub const NetworkKind = StatusContract.NetworkKind;
+pub const SystemStatus = StatusContract.Snapshot;
 
 /// Holds the WLAN client and cached machine facts used by the system panel.
 /// Sampling leaves each field unchanged when its Windows query fails.
@@ -168,13 +147,6 @@ pub const SystemStatusReader = struct {
             if (self.bluetooth_probed) Log.logLine("system status: Bluetooth radio found");
         } else {
             _ = probeBluetooth(output);
-        }
-
-        var muted = output.muted;
-        var volume_percent = output.volume_percent;
-        if (AudioVolume.readCurrentOutput(&muted, &volume_percent)) {
-            output.muted = muted;
-            output.volume_percent = volume_percent;
         }
 
         output.night_light_on = SystemToggles.nightLightOnForDisplay();
@@ -349,41 +321,6 @@ pub fn networkKindFor(has_interface: bool, connected: bool) NetworkKind {
     return if (connected) .connected else .disconnected;
 }
 
-pub fn inputMethodLabel(language_id: u16, output: []u16) void {
-    if (output.len < 2) return;
-    @memset(output, 0);
-    const primary = language_id & 0x03ff;
-    const label: ?[]const u16 = switch (primary) {
-        0x04 => &.{0x4E2D},
-        0x11 => &.{0x3042},
-        0x12 => &.{0xD55C},
-        0x09 => &.{ 'E', 'N' },
-        0x07 => &.{ 'D', 'E' },
-        0x0c => &.{ 'F', 'R' },
-        0x0a => &.{ 'E', 'S' },
-        0x10 => &.{ 'I', 'T' },
-        0x16 => &.{ 'P', 'T' },
-        0x19 => &.{ 'R', 'U' },
-        else => null,
-    };
-    if (label) |value| {
-        _ = appendWide(output, 0, value);
-        return;
-    }
-    const digits = "0123456789ABCDEF";
-    const byte: u8 = @truncate(language_id);
-    output[0] = digits[byte >> 4];
-    output[1] = digits[byte & 0x0f];
-}
-
-pub fn shouldDrawInputMethod(status: *const SystemStatus, installed_layout_count: i32) bool {
-    return status.input_language_id != 0 and installed_layout_count > 1;
-}
-
-pub fn shouldDrawBattery(status: *const SystemStatus) bool {
-    return status.battery_present and status.battery_percent >= 0 and status.battery_percent <= 100;
-}
-
 pub fn networkTooltip(status: *const SystemStatus, output: []u16) void {
     if (output.len == 0) return;
     @memset(output, 0);
@@ -430,20 +367,10 @@ pub fn smokeCheck() bool {
     if (signalFromPercent(0) != .none or signalFromPercent(1) != .weak or signalFromPercent(24) != .weak) return false;
     if (signalFromPercent(25) != .fair or signalFromPercent(50) != .good or signalFromPercent(75) != .excellent) return false;
     if (networkKindFor(false, true) != .none or networkKindFor(true, false) != .disconnected or networkKindFor(true, true) != .connected) return false;
-    var label: [8]u16 = @splat(0);
-    inputMethodLabel(0x0804, &label);
-    if (!std.mem.eql(u16, wideSlice(&label), &.{0x4E2D})) return false;
-    inputMethodLabel(0x0409, &label);
-    if (!std.mem.eql(u16, wideSlice(&label), &.{ 'E', 'N' })) return false;
     var status = SystemStatus{ .network = .connected, .signal_percent = 74 };
     var tooltip: [64]u16 = @splat(0);
     networkTooltip(&status, &tooltip);
     if (!std.mem.eql(u16, wideSlice(&tooltip), &.{ 'C', 'o', 'n', 'n', 'e', 'c', 't', 'e', 'd', ' ', '(', '7', '4', '%', ')' })) return false;
-    status.battery_present = true;
-    status.battery_percent = 100;
-    if (!shouldDrawBattery(&status)) return false;
-    status.battery_percent = 255;
-    if (shouldDrawBattery(&status)) return false;
     status.bluetooth_present = true;
     status.bluetooth_on = false;
     bluetoothTooltip(&status, &tooltip);

@@ -1,5 +1,5 @@
 const std = @import("std");
-const NotificationModule = @import("Notification");
+const NotificationInput = @import("NotificationInput");
 const Log = @import("Log");
 
 const HANDLE = ?*anyopaque;
@@ -195,8 +195,18 @@ pub fn shouldAnnounceWeChatSound(wechat_running: bool, was_active: bool, is_acti
     return (became_active or new_session) and since_last_announce_ms >= announce_cooldown_ms;
 }
 
+pub fn callTransitionEvent(call_up: bool) NotificationInput.Event {
+    if (call_up) {
+        var call = NotificationInput.Message{ .source = .wechat_call, .source_key = 1, .sticky = true };
+        copyUtf8(&call.app, "微信");
+        copyUtf8(&call.title, "通话中");
+        return .{ .message = call };
+    }
+    return .{ .dismiss_source = .{ .source = .wechat_call, .key = 1 } };
+}
+
 pub const WeChatWatcher = struct {
-    call_notification_id: i64 = 0,
+    call_active: bool = false,
     call_start_ms: u64 = 0,
     call_pid: DWORD = 0,
     wechat_audio_was_active: bool = false,
@@ -207,6 +217,7 @@ pub const WeChatWatcher = struct {
     last_handle: i64 = 0,
     last_announce_ms: u64 = 0,
     announced: i32 = 0,
+    next_source_key: u64 = 2,
     seen: [max_windows]Seen = @splat(.{}),
     seen_count: usize = 0,
 
@@ -218,8 +229,8 @@ pub const WeChatWatcher = struct {
         return self.announced;
     }
 
-    pub fn pollSound(self: *WeChatWatcher, store: ?*NotificationModule.Store, wechat_running: bool, session_active: bool, session_count: i32, now_ms: u64) usize {
-        const destination = store orelse return 0;
+    pub fn pollSound(self: *WeChatWatcher, output: []NotificationInput.Event, wechat_running: bool, session_active: bool, session_count: i32, now_ms: u64) usize {
+        if (output.len == 0) return 0;
         const since = now_ms -% self.last_sound_announce_ms;
         const announce = shouldAnnounceWeChatSound(wechat_running, self.wechat_audio_was_active, session_active, self.wechat_audio_sessions, session_count, self.wechat_audio_primed, since);
         if (!self.wechat_audio_primed or session_active != self.wechat_audio_was_active or session_count != self.wechat_audio_sessions) Log.logLine("wechat: audio state changed");
@@ -228,18 +239,19 @@ pub const WeChatWatcher = struct {
         self.wechat_audio_primed = true;
         if (!announce) return 0;
 
-        var notification = NotificationModule.Notification{};
+        var notification = NotificationInput.Message{ .source = .wechat_sound, .source_key = self.next_source_key };
+        self.next_source_key +%= 1;
         copyUtf8(&notification.app, "微信");
         copyUtf8(&notification.title, "有新消息");
-        _ = destination.pushAt(notification, now_ms);
+        output[0] = .{ .message = notification };
         self.last_sound_announce_ms = now_ms;
         self.sound_announcements += 1;
         Log.logLine("wechat: announced a notification sound");
         return 1;
     }
 
-    pub fn poll(self: *WeChatWatcher, store: ?*NotificationModule.Store, now_ms: u64) usize {
-        const destination = store orelse return 0;
+    pub fn poll(self: *WeChatWatcher, output: []NotificationInput.Event, now_ms: u64) usize {
+        if (output.len == 0) return 0;
         var visit = WindowVisit{};
         _ = EnumWindows(collectWindow, @bitCast(@as(usize, @intFromPtr(&visit))));
 
@@ -276,11 +288,12 @@ pub const WeChatWatcher = struct {
             if (window.handle == self.last_handle and now_ms -% self.last_announce_ms < announce_cooldown_ms) continue;
             if (now_ms -% self.last_announce_ms < announce_cooldown_ms) continue;
 
-            var notification = NotificationModule.Notification{};
+            var notification = NotificationInput.Message{ .source = .wechat_toast, .source_key = self.next_source_key };
+            self.next_source_key +%= 1;
             copyUtf8(&notification.app, "微信");
             copyUtf8(&notification.title, "有新消息");
             notification.urgency = .normal;
-            _ = destination.pushAt(notification, now_ms);
+            output[0] = .{ .message = notification };
             self.last_handle = window.handle;
             self.last_announce_ms = now_ms;
             self.announced += 1;
@@ -292,22 +305,19 @@ pub const WeChatWatcher = struct {
         self.seen = current;
         self.seen_count = current_count;
 
-        if (call_up and self.call_notification_id == 0) {
-            var call = NotificationModule.Notification{};
-            copyUtf8(&call.app, "微信");
-            copyUtf8(&call.title, "通话中");
-            call.sticky = true;
-            const stored = destination.pushAt(call, now_ms);
-            self.call_notification_id = stored.id;
+        if (call_up and !self.call_active) {
+            output[0] = callTransitionEvent(true);
+            self.call_active = true;
             self.call_start_ms = now_ms;
             Log.logLine("wechat: call started");
             return 1;
-        } else if (!call_up and self.call_notification_id != 0) {
-            _ = destination.markRead(self.call_notification_id);
-            self.call_notification_id = 0;
+        } else if (!call_up and self.call_active) {
+            output[0] = callTransitionEvent(false);
+            self.call_active = false;
             self.call_start_ms = 0;
             self.call_pid = 0;
             Log.logLine("wechat: call ended");
+            return 1;
         }
         return 0;
     }
@@ -328,12 +338,21 @@ pub fn smokeCheck() bool {
     return true;
 }
 
+test "wechat call adapter emits a source-tagged sticky event and dismissal" {
+    const started = callTransitionEvent(true);
+    try std.testing.expectEqual(NotificationInput.Source.wechat_call, started.message.source);
+    try std.testing.expect(started.message.sticky);
+    const ended = callTransitionEvent(false);
+    try std.testing.expectEqual(NotificationInput.Source.wechat_call, ended.dismiss_source.source);
+    try std.testing.expectEqual(@as(u64, 1), ended.dismiss_source.key);
+}
+
 comptime {
     if (false) {
         var watcher = WeChatWatcher{};
-        var store = NotificationModule.Store{};
-        _ = watcher.poll(&store, 10);
-        _ = watcher.pollSound(&store, true, true, 1, 10);
+        var events: [1]NotificationInput.Event = undefined;
+        _ = watcher.poll(&events, 10);
+        _ = watcher.pollSound(&events, true, true, 1, 10);
         _ = anyWeChatProcessRunning();
         _ = isWeChatProcess(1);
     }

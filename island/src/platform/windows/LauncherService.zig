@@ -1,7 +1,8 @@
 const std = @import("std");
+const LauncherCatalog = @import("LauncherCatalog");
 const WicImage = @import("WicImage");
 
-pub const StartApp = struct { name: [112]u16 = @splat(0), target: [512]u16 = @splat(0) };
+pub const StartApp = LauncherCatalog.App;
 const Guid = extern struct { data1: u32, data2: u16, data3: u16, data4: [8]u8 };
 const HINSTANCE = ?*anyopaque;
 const HWND = ?*anyopaque;
@@ -662,7 +663,7 @@ pub fn stem(path_arg: []const u16) []const u16 {
     return leaf;
 }
 
-pub fn launchStartApp(target: [*:0]const u16) bool {
+pub fn launchStartApp(target: [*:0]const u16) LauncherCatalog.LaunchResult {
     const input = cWide(std.mem.span(target));
     var parsing: [600]u16 = @splat(0);
     const has_path = std.mem.indexOf(u16, input, &.{ ':', '\\' }) != null or std.mem.indexOf(u16, input, &.{ 's', 'h', 'e', 'l', 'l', ':' }) != null;
@@ -678,7 +679,11 @@ pub fn launchStartApp(target: [*:0]const u16) bool {
     }
     parsing[length] = 0;
     const result = ShellExecuteW(null, &.{ 'o', 'p', 'e', 'n', 0 }, @ptrCast(&parsing), null, null, 1);
-    return if (result) |handle| @intFromPtr(handle) > 32 else false;
+    const shell_code: i32 = if (result) |handle| blk: {
+        const raw = @intFromPtr(handle);
+        break :blk if (raw > @as(usize, @intCast(std.math.maxInt(i32)))) std.math.maxInt(i32) else @intCast(raw);
+    } else 0;
+    return .{ .succeeded = shell_code > 32, .shell_code = shell_code };
 }
 
 /// Extracts a shell item's icon and encodes it as a transparent PNG.

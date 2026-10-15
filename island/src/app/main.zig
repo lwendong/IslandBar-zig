@@ -4,42 +4,69 @@ const Geometry = @import("Geometry");
 const InputRegion = @import("InputRegion");
 const GlassMaterial = @import("GlassMaterial");
 const WicImage = @import("WicImage");
+const AppIconService = @import("AppIconService");
 const AppBar = @import("AppBar");
 const AudioVolume = @import("AudioVolume");
-const Weather = @import("Weather");
-const MusicSession = @import("MusicSession");
-const Lyrics = @import("Lyrics");
-const SoundOutput = @import("SoundOutput");
-const StartApps = @import("StartApps");
+const WeatherService = @import("WeatherService");
+const WeatherController = @import("WeatherController");
+const WeatherPage = @import("WeatherPage");
+const StatusLineWeather = @import("StatusLineWeather");
+const MediaService = @import("MediaService");
+const MusicController = @import("MusicController");
+const MusicPage = @import("MusicPage");
+const Lyrics = @import("MusicLyrics");
+const LyricsService = @import("LyricsService");
+const AudioService = @import("AudioService");
+const SoundController = @import("SoundController");
+const SoundPage = @import("SoundPage");
+const LauncherController = @import("LauncherController");
+const LauncherPage = @import("LauncherPage");
+const LauncherService = @import("LauncherService");
+const TrayCatalog = @import("TrayCatalog");
+const TrayController = @import("TrayController");
+const TrayPage = @import("TrayPage");
 const TrayPress = @import("TrayPress");
 const Renderer = @import("Renderer");
+const PresentationPolicy = @import("PresentationPolicy");
 const Diagnostics = @import("Diagnostics");
 const IslandWindow = @import("IslandWindow");
 const TextRenderer = @import("TextRenderer");
+const InputRouter = @import("InputRouter");
 const Setup = @import("Setup");
 const Log = @import("Log");
 const Motion = @import("Motion");
 const PlayerWindow = @import("PlayerWindow");
-const DisplayBrightness = @import("DisplayBrightness");
+const SystemService = @import("SystemService");
 const MiniJson = @import("MiniJson");
 const Monitor = @import("Monitor");
 const NativeTaskbar = @import("NativeTaskbar");
 const Notification = @import("Notification");
 const NotificationIcon = @import("NotificationIcon");
+const NotificationInput = @import("NotificationInput");
+const NotificationPage = @import("NotificationPage");
 const NotificationPipe = @import("NotificationPipe");
-const StartMenu = @import("StartMenu");
+const ShellCommand = @import("ShellCommand");
 const StatePolicy = @import("StatePolicy");
-const SystemStatus = @import("SystemStatus");
-const SystemToggles = @import("SystemToggles");
+const SystemController = @import("SystemController");
+const SystemPage = @import("SystemPage");
+const SystemLayout = @import("SystemLayout");
 const SysStatusProbe = @import("SysStatusProbe");
-const ThumbnailPreview = @import("ThumbnailPreview");
+const TaskbarCatalog = @import("TaskbarCatalog");
+const TaskbarController = @import("TaskbarController");
+const TaskbarLayout = @import("TaskbarLayout");
+const TaskbarPage = @import("TaskbarPage");
+const ThumbnailAdapter = @import("ThumbnailAdapter");
+const ThumbnailLayout = @import("ThumbnailLayout");
 const Theme = @import("Theme");
 const ToastStore = @import("ToastStore");
 const TrayIcons = @import("TrayIcons");
 const WindowList = @import("WindowList");
 const WeChatWatch = @import("WeChatWatch");
-const TaskStripLayout = @import("TaskStripLayout");
+const BarControlLayout = @import("BarControlLayout");
 const CardLayout = @import("CardLayout");
+const LayoutSnapshot = @import("LayoutSnapshot");
+const AppRuntime = @import("AppRuntime");
+const AppWindowHost = @import("AppWindowHost");
 
 const HWND = IslandWindow.HWND;
 const HBRUSH = ?*anyopaque;
@@ -75,6 +102,7 @@ const SystemTime = extern struct {
     milliseconds: u16,
 };
 const Luid = extern struct { low_part: u32 = 0, high_part: i32 = 0 };
+const FileTime = extern struct { low: u32, high: u32 };
 const LuidAndAttributes = extern struct { luid: Luid = .{}, attributes: u32 = 0 };
 const TokenPrivileges = extern struct { count: u32 = 0, privileges: [1]LuidAndAttributes = @splat(.{}) };
 
@@ -87,6 +115,7 @@ extern "kernel32" fn GetModuleFileNameW(module: ?*anyopaque, filename: [*]u16, s
 extern "kernel32" fn GetProcAddress(module: ?*anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
 extern "user32" fn GetSystemMetrics(index: i32) callconv(.winapi) i32;
 extern "user32" fn IsWindow(window: HWND) callconv(.winapi) i32;
+extern "user32" fn GetWindowThreadProcessId(window: HWND, process_id: *DWORD) callconv(.winapi) DWORD;
 extern "user32" fn GetDpiForSystem() callconv(.winapi) u32;
 extern "user32" fn LockWorkStation() callconv(.winapi) i32;
 extern "user32" fn ExitWindowsEx(flags: u32, reason: u32) callconv(.winapi) i32;
@@ -103,6 +132,7 @@ extern "kernel32" fn GetCurrentProcess() callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn Sleep(milliseconds: u32) callconv(.winapi) void;
 extern "kernel32" fn OpenProcess(access: DWORD, inherit: i32, process_id: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn QueryFullProcessImageNameW(process: HANDLE, flags: DWORD, path: [*]u16, length: *DWORD) callconv(.winapi) i32;
+extern "kernel32" fn GetProcessTimes(process: HANDLE, creation: *FileTime, exit_time: *FileTime, kernel_time: *FileTime, user_time: *FileTime) callconv(.winapi) i32;
 extern "kernel32" fn CreateToolhelp32Snapshot(flags: DWORD, process_id: DWORD) callconv(.winapi) HANDLE;
 extern "kernel32" fn Process32FirstW(snapshot: HANDLE, entry: *ProcessEntry32W) callconv(.winapi) i32;
 extern "kernel32" fn Process32NextW(snapshot: HANDLE, entry: *ProcessEntry32W) callconv(.winapi) i32;
@@ -155,160 +185,22 @@ const per_monitor_aware_v2: ?*anyopaque = @ptrFromInt(std.math.maxInt(usize) - 3
 const single_instance_name: [*:0]const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', 'B', 'a', 'r', '.', 'S', 'i', 'n', 'g', 'l', 'e', 'I', 'n', 's', 't', 'a', 'n', 'c', 'e', 0 };
 var window_width_px: i32 = @intFromFloat(Geometry.pill_width_dip);
 var window_height_px: i32 = @intFromFloat(Geometry.pill_height_dip);
-var weather_reader = Weather.WeatherReader{};
 
-const wide_wifi: [*:0]const u16 = &.{ 'W', 'i', '-', 'F', 'i', 0 };
-const wide_bluetooth: [*:0]const u16 = &.{ 'B', 'l', 'u', 'e', 't', 'o', 'o', 't', 'h', 0 };
-const wide_airplane: [*:0]const u16 = &.{ 0x98de, 0x884c, 0x6a21, 0x5f0f, 0 };
-const wide_accessibility: [*:0]const u16 = &.{ 0x8f85, 0x52a9, 0x529f, 0x80fd, 0 };
-const wide_battery_saver: [*:0]const u16 = &.{ 0x8282, 0x80fd, 0x6a21, 0x5f0f, 0 };
-const wide_captions: [*:0]const u16 = &.{ 0x5b9e, 0x65f6, 0x5b57, 0x5e55, 0 };
-const wide_night_light: [*:0]const u16 = &.{ 0x591c, 0x95f4, 0x6a21, 0x5f0f, 0 };
-const wide_hotspot: [*:0]const u16 = &.{ 0x79fb, 0x52a8, 0x70ed, 0x70b9, 0 };
-const wide_nearby: [*:0]const u16 = &.{ 0x5c31, 0x8fd1, 0x5171, 0x4eab, 0 };
-const wide_wired_display: [*:0]const u16 = &.{ 0x6709, 0x7ebf, 0x663e, 0x793a, 0x5668, 0 };
-const wide_projection: [*:0]const u16 = &.{ 0x6295, 0x5f71, 0 };
-const wide_appearance: [*:0]const u16 = &.{ 0x5916, 0x89c2, 0 };
-const wide_battery: [*:0]const u16 = &.{ 'B', 'a', 't', 't', 'e', 'r', 'y', 0 };
-const wide_available: [*:0]const u16 = &.{ 0x53ef, 0x7528, 0 };
-const wide_not_connected: [*:0]const u16 = &.{ 0x672a, 0x8fde, 0x63a5, 0 };
-const wide_off: [*:0]const u16 = &.{ 0x5173, 0 };
-const wide_sound_title: [*:0]const u16 = &.{ 0x58F0, 0x97F3, 0x8F93, 0x51FA, 0 };
-const wide_sound_device_label: [*:0]const u16 = &.{ 0x8F93, 0x51FA, 0x8BBE, 0x5907, 0 };
-const wide_sound_spatial_label: [*:0]const u16 = &.{ 0x7A7A, 0x95F4, 0x97F3, 0x6548, 0 };
-const wide_sound_mixer_label: [*:0]const u16 = &.{ 0x97F3, 0x91CF, 0x5408, 0x6210, 0x5668, 0 };
-const wide_sound_footer: [*:0]const u16 = &.{ 0x66F4, 0x591A, 0x97F3, 0x91CF, 0x8BBE, 0x7F6E, 0 };
-const wide_sound_off: [*:0]const u16 = &.{ 0x5173, 0 };
-const wide_sound_sonic: [*:0]const u16 = &.{ 0x7528, 0x4E8E, 0x8033, 0x673A, 0x7684, ' ', 'W', 'i', 'n', 'd', 'o', 'w', 's', ' ', 'S', 'o', 'n', 'i', 'c', 0 };
-const wide_output_device: [*:0]const u16 = &.{ 'O', 'u', 't', 'p', 'u', 't', ' ', 'd', 'e', 'v', 'i', 'c', 'e', 0 };
-const wide_tray_page: [*:0]const u16 = &.{ 0x6258, 0x76D8, 0 };
-const wide_start_page: [*:0]const u16 = &.{ 0x5F00, 0x59CB, 0 };
 const wide_open_verb: [*:0]const u16 = &.{ 'o', 'p', 'e', 'n', 0 };
 const wide_explorer: [*:0]const u16 = &.{ 'e', 'x', 'p', 'l', 'o', 'r', 'e', 'r', '.', 'e', 'x', 'e', 0 };
 const shutdown_privilege: [*:0]const u16 = &.{ 'S', 'e', 'S', 'h', 'u', 't', 'd', 'o', 'w', 'n', 'P', 'r', 'i', 'v', 'i', 'l', 'e', 'g', 'e', 0 };
 const start_icon_buffer_bytes: usize = 16 * 1024;
-const wide_on: [*:0]const u16 = &.{ 0x5f00, 0 };
-const wide_disabled: [*:0]const u16 = &.{ 0x5df2, 0x5173, 0x95ed, 0 };
-const uri_accessibility: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'e', 'a', 's', 'e', 'o', 'f', 'a', 'c', 'c', 'e', 's', 's', 0 };
-const uri_battery: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'b', 'a', 't', 't', 'e', 'r', 'y', 's', 'a', 'v', 'e', 'r', 0 };
-const uri_hotspot: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'n', 'e', 't', 'w', 'o', 'r', 'k', '-', 'm', 'o', 'b', 'i', 'l', 'e', 'h', 'o', 't', 's', 'p', 'o', 't', 0 };
-const uri_nearby: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'n', 'e', 'a', 'r', 'b', 'y', '-', 's', 'h', 'a', 'r', 'i', 'n', 'g', 0 };
-const uri_display: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'd', 'i', 's', 'p', 'l', 'a', 'y', 0 };
-const uri_typing: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 't', 'y', 'p', 'i', 'n', 'g', 0 };
-const uri_wifi: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'n', 'e', 't', 'w', 'o', 'r', 'k', '-', 'w', 'i', 'f', 'i', 0 };
-const uri_bluetooth: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'b', 'l', 'u', 'e', 't', 'o', 'o', 't', 'h', 0 };
-const uri_airplane: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'n', 'e', 't', 'w', 'o', 'r', 'k', 0 };
-const uri_night_light: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 'n', 'i', 'g', 'h', 't', 'l', 'i', 'g', 'h', 't', 0 };
 const uri_sound: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 's', 'o', 'u', 'n', 'd', 0 };
 const uri_settings: [*:0]const u16 = &.{ 'm', 's', '-', 's', 'e', 't', 't', 'i', 'n', 'g', 's', ':', 0 };
 
-fn addPanelTile(tiles: *[CardLayout.max_system_panel_tiles]TextRenderer.SystemPanelTile, count: *usize, label: ?[*:0]const u16, state: ?[*:0]const u16, icon: TextRenderer.SystemPanelIcon, icon_value: i32, on: bool, chevron: bool, action: TextRenderer.PanelAction, uri: ?[*:0]const u16) void {
-    if (count.* >= tiles.len) return;
-    tiles[count.*] = .{ .label = label, .state_text = state, .icon = icon, .icon_value = icon_value, .on = on, .chevron = chevron, .action = action, .uri = uri };
-    count.* += 1;
-}
-
 fn buildSystemPanelText(context: *PaintContext) void {
-    var all: [CardLayout.max_system_panel_tiles]TextRenderer.SystemPanelTile = @splat(.{});
-    var count: usize = 0;
-    const status = &context.system_status;
-    const network_state = if (!status.wifi_radio_on) wide_disabled else switch (status.network) {
-        .none => wide_disabled,
-        .disconnected => wide_not_connected,
-        .connected => wide_available,
-    };
-    addPanelTile(&all, &count, wide_wifi, network_state, .network, @backingInt(status.signal), status.wifi_radio_on, false, .toggle_wifi, null);
-    addPanelTile(&all, &count, wide_bluetooth, if (status.bluetooth_on) wide_not_connected else wide_off, .bluetooth, @intFromBool(status.bluetooth_on), status.bluetooth_on, false, .toggle_bluetooth, null);
-    addPanelTile(&all, &count, wide_airplane, null, .airplane, 0, !status.wifi_radio_on and !status.bluetooth_on, false, .toggle_radio, null);
-    addPanelTile(&all, &count, wide_accessibility, null, .accessibility, 0, false, true, .open_settings, uri_accessibility);
-    addPanelTile(&all, &count, wide_battery_saver, if (status.battery_saver_on) wide_on else wide_off, .battery_saver, 0, status.battery_saver_on, false, .open_settings, uri_battery);
-    addPanelTile(&all, &count, wide_captions, if (status.live_captions_on) wide_on else wide_off, .captions, 0, status.live_captions_on, false, .toggle_live_captions, null);
-    addPanelTile(&all, &count, wide_night_light, if (status.night_light_on) wide_on else wide_off, .moon, 0, status.night_light_on, false, .toggle_night_light, null);
-    addPanelTile(&all, &count, wide_hotspot, null, .hotspot, 0, false, false, .open_settings, uri_hotspot);
-    addPanelTile(&all, &count, wide_nearby, null, .share, 0, false, false, .open_settings, uri_nearby);
-    addPanelTile(&all, &count, wide_wired_display, null, .wired_display, 0, false, true, .open_settings, uri_display);
-    addPanelTile(&all, &count, wide_projection, null, .projection, 0, false, true, .projection_modes, null);
-    if (SystemStatus.shouldDrawInputMethod(status, context.installed_layout_count)) {
-        SystemStatus.inputMethodLabel(status.input_language_id, &context.input_language_label);
-        addPanelTile(&all, &count, @ptrCast(&context.input_language_label), null, .input_method, 0, true, false, .open_settings, uri_typing);
+    var volume: f32 = 0;
+    var muted = false;
+    if (context.sound_controller) |sound| {
+        volume = sound.state.displayedMasterLevel();
+        muted = sound.state.displayedMuted();
     }
-    @memset(&context.theme_name, 0);
-    const current_name = &Theme.currentTheme().name;
-    const current_name_len = std.mem.indexOfScalar(u16, current_name, 0) orelse current_name.len;
-    @memcpy(context.theme_name[0..@min(current_name_len, context.theme_name.len - 1)], current_name[0..@min(current_name_len, context.theme_name.len - 1)]);
-    addPanelTile(&all, &count, wide_appearance, @ptrCast(&context.theme_name), .settings, 0, false, false, .cycle_theme, null);
-    if (SystemStatus.shouldDrawBattery(status)) {
-        var ascii: [8]u8 = undefined;
-        const value = std.fmt.bufPrint(&ascii, "{d}%", .{status.battery_percent}) catch &.{};
-        @memset(&context.battery_label, 0);
-        for (value, 0..) |byte, index| context.battery_label[index] = byte;
-        addPanelTile(&all, &count, wide_battery, @ptrCast(&context.battery_label), .battery, status.battery_percent, status.on_ac_power or status.battery_percent > 20, false, .open_settings, uri_battery);
-    }
-    addPanelTile(&all, &count, wide_tray_page, null, .share, 0, false, false, .open_tray_page, null);
-    addPanelTile(&all, &count, wide_start_page, null, .settings, 0, false, false, .open_start_page, null);
-
-    context.system_panel_text = .{};
-    const per_page: usize = @intCast(CardLayout.max_system_tiles);
-    const page_count_usize = @max(1, (count + per_page - 1) / per_page);
-    const page_count: i32 = @intCast(page_count_usize);
-    const page = @mod(context.system_panel_page, page_count);
-    context.system_panel_page = page;
-    context.system_panel_text.page_index = page;
-    context.system_panel_text.page_count = page_count;
-    const first = @as(usize, @intCast(page)) * CardLayout.max_system_tiles;
-    const copied = @min(CardLayout.max_system_tiles, count - first);
-    context.system_panel_text.tile_count = copied;
-    @memcpy(context.system_panel_text.tiles[0..copied], all[first .. first + copied]);
-    context.system_panel_text.volume = context.volume_level;
-    context.system_panel_text.muted = context.volume_muted;
-    context.system_panel_text.has_brightness = context.brightness_available;
-    context.system_panel_text.brightness = @as(f32, @floatFromInt(context.brightness_percent)) / 100;
-}
-
-fn wideArrayZ(array: *const [128]u16) [*:0]const u16 {
-    return @ptrCast(array);
-}
-
-fn buildSoundPageText(context: *PaintContext) void {
-    var page = TextRenderer.SoundPageText{};
-    page.title = wide_sound_title;
-    page.device_label = wide_sound_device_label;
-    page.spatial_label = wide_sound_spatial_label;
-    page.mixer_label = wide_sound_mixer_label;
-    page.footer = wide_sound_footer;
-    page.spatial[0] = .{ .label = wide_sound_off, .selected = true };
-    page.spatial[1] = .{ .label = wide_sound_sonic, .selected = false };
-
-    const snapshot = &context.sound_snapshot;
-    for (snapshot.devices[0..@min(snapshot.device_count, page.devices.len)], 0..) |*device, index| {
-        page.devices[index] = .{
-            .name = wideArrayZ(&device.name),
-            .form_factor = device.form_factor,
-            .is_default = device.is_default,
-        };
-        page.device_count += 1;
-    }
-    page.mix[0] = .{
-        .label = if (snapshot.default_device_name[0] != 0) wideArrayZ(&snapshot.default_device_name) else wide_output_device,
-        .volume = context.volume_level,
-        .muted = context.volume_muted,
-    };
-    page.mix_count = 1;
-    for (snapshot.sessions[0..@min(snapshot.session_count, SoundOutput.max_sessions)], 0..) |*session, index| {
-        if (page.mix_count >= page.mix.len) break;
-        page.mix[page.mix_count] = .{
-            .label = wideArrayZ(&session.name),
-            .volume = session.volume,
-            .muted = false,
-            .icon_png = if (session.icon_size > 0) session.icon[0..@min(session.icon_size, session.icon.len)] else null,
-            .icon_size = @min(session.icon_size, session.icon.len),
-            .icon_revision = session.icon_revision,
-        };
-        _ = index;
-        page.mix_count += 1;
-    }
-    page.scroll = context.sound_page_scroll;
-    context.sound_page_text = page;
+    SystemPage.build(&context.system_panel_view, &context.system_state, systemPanelCardBox(context), volume, muted);
 }
 
 fn buildTrayPageText(context: *PaintContext) void {
@@ -326,14 +218,21 @@ fn buildTrayPageText(context: *PaintContext) void {
             .has_uid = info.has_uid,
             .has_guid = info.has_guid,
             .guid = .{ .data1 = info.guid.data1, .data2 = info.guid.data2, .data3 = info.guid.data3, .data4 = info.guid.data4 },
+            .exe_path = info.exe_path,
         };
         context.tray_page_icon_count += 1;
     }
     context.tray_page_revision = source.getRevision();
+    _ = TrayController.catalogChanged(&context.tray_state, context.tray_page_revision);
+    context.tray_card_text.icons = context.tray_page_icons[0..context.tray_page_icon_count];
+    context.tray_card_text.title = &.{ 0x6258, 0x76D8 };
 }
 
 fn buildStartCardText(context: *PaintContext) void {
-    const apps = context.start_apps orelse return;
+    const apps = context.start_apps orelse {
+        context.start_card_text = .{};
+        return;
+    };
     const pin_count = @min(@as(usize, @intCast(@max(0, apps.pinCount()))), context.start_pin_icons.len);
     @memset(&context.start_pin_icons, null);
     @memset(&context.start_pin_icon_sizes, 0);
@@ -349,25 +248,20 @@ fn buildStartCardText(context: *PaintContext) void {
     }
     context.start_card_text = .{
         .pins = apps.pins.items,
-        .pin_count = pin_count,
         .pin_icons = context.start_pin_icons[0..pin_count],
         .pin_icon_sizes = context.start_pin_icon_sizes[0..pin_count],
         .pin_icon_revision = apps.iconRevision(),
         .list = apps.list.items,
-        .list_count = @intCast(@max(0, apps.listCount())),
-        .picker_scroll_row = context.start_picker_scroll_row,
-        .page = context.start_page_state,
-        .hovered_pin = context.start_hovered_pin,
-        .hovered_picker_row = context.start_hovered_picker_row,
-        .hovered_power_row = context.start_hovered_power_row,
-        .power_button_hovered = context.start_power_hovered,
-        .power_confirm_row = context.start_power_confirm_row,
-        .account_name = @ptrCast(&context.account_name),
+        .hovered_pin = context.start_card_text.hovered_pin,
+        .hovered_picker_row = context.start_card_text.hovered_picker_row,
+        .hovered_power_row = context.start_card_text.hovered_power_row,
+        .power_button_hovered = context.start_card_text.power_button_hovered,
+        .power_confirm_row = context.launcher_state.power_confirm_row,
+        .account_name = std.mem.sliceTo(&context.account_name, 0),
     };
     context.last_start_icon_revision = apps.iconRevision();
 }
-
-fn paintClock(window: HWND) void {
+fn paintClock(window: HWND, weather_state: ?*const WeatherController.State) void {
     var paint: PaintStruct = undefined;
     const dc = BeginPaint(window, &paint) orelse return;
     var client = WinRect{
@@ -389,7 +283,7 @@ fn paintClock(window: HWND) void {
     text[3] = '0' + @as(u16, @intCast(time.minute / 10));
     text[4] = '0' + time.minute % 10;
     var weather_line: [64]u16 = @splat(0);
-    weather_reader.getLine(&weather_line);
+    if (weather_state) |state| WeatherPage.weatherLineFor(state.reading, &weather_line);
     if (weather_line[0] != 0) {
         var length: usize = 0;
         while (length < weather_line.len and weather_line[length] != 0) : (length += 1) {}
@@ -403,11 +297,12 @@ fn paintClock(window: HWND) void {
 const wide_no_fullscreen: [*:0]const u16 = &.{ 'I', 'S', 'L', 'A', 'N', 'D', 'B', 'A', 'R', '_', 'N', 'O', '_', 'F', 'U', 'L', 'L', 'S', 'C', 'R', 'E', 'E', 'N', 0 };
 const wide_no_media: [*:0]const u16 = &.{ 'I', 'S', 'L', 'A', 'N', 'D', 'B', 'A', 'R', '_', 'N', 'O', '_', 'M', 'E', 'D', 'I', 'A', 0 };
 const wide_no_session: [*:0]const u16 = &.{ 'I', 'S', 'L', 'A', 'N', 'D', 'B', 'A', 'R', '_', 'N', 'O', '_', 'S', 'E', 'S', 'S', 'I', 'O', 'N', 0 };
+const wide_ui_trace: [*:0]const u16 = &.{ 'I', 'S', 'L', 'A', 'N', 'D', 'B', 'A', 'R', '_', 'T', 'R', 'A', 'C', 'E', '_', 'U', 'I', 0 };
 fn runNotify() i32 {
-    var notification = Notification.Notification{};
-    var title: [Notification.title_capacity * 4]u8 = undefined;
-    var body: [Notification.body_capacity * 4]u8 = undefined;
-    var app: [Notification.app_name_capacity * 4]u8 = undefined;
+    var notification = NotificationInput.Message{};
+    var title: [NotificationInput.title_capacity * 4]u8 = undefined;
+    var body: [NotificationInput.body_capacity * 4]u8 = undefined;
+    var app: [NotificationInput.app_name_capacity * 4]u8 = undefined;
     var icon: [260 * 4]u8 = undefined;
     var urgency: [16]u8 = undefined;
 
@@ -712,15 +607,15 @@ fn runIconDump() i32 {
         return 2;
     };
     var executable: [260]u16 = @splat(0);
-    if (!MusicSession.executableFromAppId(app_id_wide[0..app_id_length], &executable)) {
+    if (!MediaService.executableFromAppId(app_id_wide[0..app_id_length], &executable)) {
         logFormatted("icon dump: '{s}' did not resolve to an executable", .{app_id_utf8});
         return 1;
     }
     var executable_utf8: [1024]u8 = undefined;
     logFormatted("icon dump: resolved to {s}", .{CommandLine.wideTextToUtf8(&executable, &executable_utf8)});
 
-    var png: [MusicSession.artwork_capacity]u8 = undefined;
-    const png_size = MusicSession.fetchAppIconForTest(&executable, &png);
+    var png: [MediaService.artwork_capacity]u8 = undefined;
+    const png_size = AppIconService.fetchFileIconPng(&executable, &png);
     logFormatted("icon dump: encoded {d} bytes of PNG", .{png_size});
     if (png_size == 0) return 1;
 
@@ -922,9 +817,9 @@ fn runLyricsTestFromCommandLine(verbose: bool) i32 {
 
     const started = GetTickCount64();
     var lyrics = Lyrics.Lyrics{};
-    var report = Lyrics.LyricsFetchReport{};
+    var report = LyricsService.LyricsFetchReport{};
     var reason: [384]u8 = @splat(0);
-    const ok = Lyrics.fetchLyricsVerbose(title, artist, 10_000, &lyrics, &reason, &report);
+    const ok = LyricsService.fetchLyricsVerbose(title, artist, 10_000, &lyrics, &reason, &report);
     const elapsed = GetTickCount64() - started;
     if (verbose) {
         dumpLyricAttempt("netease", &report.netease);
@@ -965,7 +860,7 @@ fn runLyricsTestFromCommandLine(verbose: bool) i32 {
     return 0;
 }
 
-fn dumpLyricAttempt(name: []const u8, attempt: *const Lyrics.FetchAttempt) void {
+fn dumpLyricAttempt(name: []const u8, attempt: *const LyricsService.FetchAttempt) void {
     logFormatted("  {s} search: HTTP {d}  {s}", .{ name, attempt.search_status, std.mem.sliceTo(&attempt.search_url, 0) });
     if (attempt.search_body[0] != 0) logFormatted("    <- {s}", .{std.mem.sliceTo(&attempt.search_body, 0)[0..@min(400, std.mem.sliceTo(&attempt.search_body, 0).len)]});
     logFormatted("  {s} lyric : HTTP {d}  {s}", .{ name, attempt.lyric_status, std.mem.sliceTo(&attempt.lyric_url, 0) });
@@ -973,8 +868,17 @@ fn dumpLyricAttempt(name: []const u8, attempt: *const Lyrics.FetchAttempt) void 
     logFormatted("  {s} verdict: {s}", .{ name, if (attempt.verdict[0] != 0) std.mem.sliceTo(&attempt.verdict, 0) else "(nothing recorded)" });
 }
 
+fn dispatchSoundAction(context: *PaintContext, action: SoundController.Action) SoundController.Dispatch {
+    const controller = context.sound_controller orelse return .unavailable;
+    return controller.dispatch(action, GetTickCount64());
+}
+
 const PaintContext = struct {
     renderer: *Renderer.DeviceResources,
+    renderer_generation: u64 = 0,
+    last_graphics_recovery_ms: u64 = 0,
+    last_frame_duration_ms: u64 = 0,
+    trace_ui_enabled: bool = false,
     text_renderer: *TextRenderer.TextRenderer,
     pill: Renderer.PillAppearance,
     clock_style: TextRenderer.ClockStyle = .compact,
@@ -986,19 +890,22 @@ const PaintContext = struct {
     last_tick_ms: u64 = 0,
     last_clock_second: u16 = std.math.maxInt(u16),
     task_windows: WindowList.WindowList = .{},
+    taskbar_state: TaskbarController.State = .{},
+    candidate_taskbar_snapshot: TaskbarCatalog.Snapshot = .{},
+    candidate_taskbar_view: TaskbarPage.View = .{},
+    presented_taskbar_view: TaskbarPage.View = .{},
     task_last_refresh_ms: u64 = 0,
     task_buttons: [Renderer.max_task_buttons]TextRenderer.TaskButton = @splat(.{}),
-    task_button_appear: [Renderer.max_task_buttons]f32 = @splat(1),
-    task_hover_amount: [Renderer.max_task_buttons]f32 = @splat(0),
-    task_hover_velocity: [Renderer.max_task_buttons]f32 = @splat(0),
-    task_hovered_index: i32 = -1,
-    thumbnail_preview: ?*ThumbnailPreview.ThumbnailPreview = null,
-    thumbnail_target: HWND = null,
+    thumbnail_preview: ?*ThumbnailAdapter.ThumbnailAdapter = null,
+    thumbnail_target_id: ?TaskbarCatalog.WindowId = null,
     thumbnail_target_since_ms: u64 = 0,
     thumbnail_reported_refusals: i32 = 0,
-    music_session: ?*MusicSession.MusicSession = null,
-    audio_volume: ?*AudioVolume.AudioVolume = null,
-    status_reader: ?*SystemStatus.SystemStatusReader = null,
+    music_session: ?*MediaService.MusicSession = null,
+    sound_controller: ?*SoundController.Controller = null,
+    sound_ports: ?*AppRuntime.SoundPortContext = null,
+    weather_reader: ?*WeatherService.WeatherReader = null,
+    weather_state: WeatherController.State = .{},
+    status_reader: ?*SystemService.StatusReader = null,
     monitor: Monitor.HMONITOR = null,
     monitor_bounds: Monitor.Rect = .{},
     monitor_work: Monitor.Rect = .{},
@@ -1012,46 +919,29 @@ const PaintContext = struct {
     status_strip_animating: bool = false,
     last_weather_revision: u64 = 0,
     music_wave_phase: f32 = 0,
-    music_wave_accent: WicImage.AccentColour = .{},
+    music_wave_accent: MediaService.ArtworkAccent = .{},
     last_wave_artwork_revision: u64 = std.math.maxInt(u64),
     music_meter_redraw_ms: u64 = 0,
-    system_status: SystemStatus.SystemStatus = .{},
+    system_state: SystemController.State = .{},
     status_sampled_ms: u64 = 0,
-    installed_layout_count: i32 = 0,
-    volume_level: f32 = 0,
-    volume_muted: bool = false,
-    brightness_available: bool = false,
-    brightness_percent: i32 = 50,
-    system_panel_page: i32 = 0,
     system_panel_pinned: bool = false,
-    card_owner: Renderer.CardOwner = .none,
-    panel_level: CardLayout.PanelLevel = .tiles,
-    card_hang: TaskStripLayout.CardHang = .system_button,
+    presentation: PresentationPolicy.State = .{},
+    card_hang: BarControlLayout.CardHang = .system_button,
     forced_state: ?Motion.IslandState = null,
-    system_panel_text: TextRenderer.SystemPanelText = .{},
+    system_panel_view: SystemPage.View = .{},
     tray_icons: ?*TrayIcons.TrayIcons = null,
-    tray_page_open: bool = false,
-    tray_page_icons: [TextRenderer.tray_icon_count_max]TextRenderer.TrayIcon = @splat(.{}),
+    tray_page_icons: [TrayPage.max_icons]TrayCatalog.Icon = @splat(.{}),
     tray_page_icon_count: usize = 0,
     tray_page_revision: u64 = 0,
-    tray_hovered_index: i32 = -1,
     tray_last_refresh_ms: u64 = 0,
-    tray_menu_open: bool = false,
-    tray_menu_cell: i32 = -1,
-    tray_menu_actions: [CardLayout.max_tray_menu_entries]CardLayout.TrayMenuAction = @splat(.open),
-    tray_menu_action_count: usize = 0,
-    tray_menu_layout: CardLayout.TrayMenuLayout = .{},
-    tray_menu_hovered: i32 = -1,
-    tray_quit_armed: bool = false,
-    start_apps: ?*StartApps.StartApps = null,
+    tray_state: TrayController.State = .{},
+    tray_card_text: TrayPage.CardText = .{},
+    candidate_tray_view: TrayPage.View = .{},
+    presented_tray_view: TrayPage.View = .{},
+    start_apps: ?*LauncherService.StartApps = null,
     start_page_open: bool = false,
-    start_page_state: i32 = 0,
-    start_picker_scroll_row: i32 = 0,
-    start_power_confirm_row: i32 = -1,
-    start_hovered_pin: i32 = -1,
-    start_hovered_picker_row: i32 = -1,
-    start_hovered_power_row: i32 = -1,
-    start_power_hovered: bool = false,
+    launcher_state: LauncherController.State = .{},
+
     start_button_wash: f32 = 0,
     start_button_velocity: f32 = 0,
     system_button_wash: f32 = 0,
@@ -1062,27 +952,28 @@ const PaintContext = struct {
     start_pin_icons: [18]?[]const u8 = @splat(null),
     start_pin_icon_sizes: [18]usize = @splat(0),
     start_pin_icon_data: []u8 = &.{},
-    start_card_text: TextRenderer.StartCardText = .{},
+    start_card_text: LauncherPage.CardText = .{},
+    candidate_launcher_layout: LauncherPage.View = .{},
+    presented_launcher_layout: LauncherPage.View = .{},
     last_start_icon_revision: u64 = 0,
     account_name: [256]u16 = @splat(0),
-    sound_output: ?*SoundOutput.SoundOutput = null,
-    sound_snapshot: SoundOutput.Snapshot = .{},
-    last_sound_revision: u64 = 0,
     sound_page_open: bool = false,
-    sound_page_scroll: f32 = 0,
-    sound_page_text: TextRenderer.SoundPageText = .{},
-    mixer_drag_row: i32 = -1,
-    mixer_drag_pid: u32 = 0,
+    sound_page_state: SoundPage.LocalState = .{},
+    candidate_sound_layout: LayoutSnapshot.Snapshot = .{},
+    presented_sound_layout: LayoutSnapshot.Snapshot = .{},
+    candidate_music_layout: LayoutSnapshot.Snapshot = .{},
+    presented_music_layout: LayoutSnapshot.Snapshot = .{},
+    layout_snapshot_generation: u64 = 0,
+    input_router: InputRouter.Router = .{},
     pending_press_point: ?IslandWindow.Point = null,
-    input_language_label: [8]u16 = @splat(0),
-    battery_label: [8]u16 = @splat(0),
-    theme_name: [33]u16 = @splat(0),
-    lyrics_provider: ?*Lyrics.LyricsProvider = null,
+    pending_press_action_handled: bool = false,
+    lyrics_provider: ?*LyricsService.LyricsProvider = null,
     player_window: ?*PlayerWindow.PlayerWindowWatch = null,
     notification_server: ?*NotificationPipe.NotificationServer = null,
     notifications: ?*Notification.Store = null,
     notification_shown: Notification.Notification = .{},
     have_notification_shown: bool = false,
+    notification_card_view: NotificationPage.View = .{},
     wechat: WeChatWatch.WeChatWatcher = .{},
     wechat_last_poll_ms: u64 = 0,
     wechat_last_sound_poll_ms: u64 = 0,
@@ -1099,26 +990,18 @@ const PaintContext = struct {
     notification_icon_height: i32 = 0,
     notification_icon_size: usize = 0,
     notification_icon_pixels: [128 * 128 * 4]u8 = @splat(0),
-    music_snapshot: MusicSession.MusicInfo = .{},
+    music_state: MusicController.State = .{},
     player_snapshot: PlayerWindow.PlayerWindowInfo = .{},
     last_music_revision: u64 = 0,
     last_player_revision: i64 = 0,
     last_lyrics_revision: u64 = 0,
     last_music_reading_ms: u64 = 0,
-    track_stopwatch_ms: i64 = 0,
-    active_title: [MusicSession.title_capacity]u8 = @splat(0),
-    active_artist: [MusicSession.artist_capacity]u8 = @splat(0),
-    active_present: bool = false,
-    active_playing: bool = false,
-    active_from_session: bool = false,
-    active_position_ms: i64 = 0,
-    music_card_text: TextRenderer.MusicCardText = .{},
-    music_background_png: [MusicSession.artwork_capacity]u8 = @splat(0),
+    music_card_text: MusicPage.CardText = .{},
+    music_strip_text: MusicPage.StripText = .{},
+    music_background_png: [MediaService.artwork_capacity]u8 = @splat(0),
     music_background_png_size: usize = 0,
     music_background_revision: u64 = 0,
     last_music_card_second: i64 = -1,
-    requested_title: [256]u8 = @splat(0),
-    requested_artist: [256]u8 = @splat(0),
     current_lyric_line: Lyrics.LyricLine = .{},
     shown_lyric_text: [Lyrics.line_capacity]u8 = @splat(0),
     replaced_lyric_text: [Lyrics.line_capacity]u8 = @splat(0),
@@ -1168,15 +1051,18 @@ fn mediaSourcePolicyCheck() bool {
 }
 
 fn cardTransitionPolicyCheck() bool {
-    const owner_open = Renderer.nextCardOwner(.none, true, true, true, false, true);
-    const level_open = CardLayout.nextPanelLevel(.tiles, true, true, true, false, false);
-    const owner_closing = Renderer.nextCardOwner(owner_open, true, false, false, false, true);
-    const level_closing = CardLayout.nextPanelLevel(level_open, true, false, false, false, false);
-    const owner_closed = Renderer.nextCardOwner(owner_closing, false, false, false, false, true);
-    const level_closed = CardLayout.nextPanelLevel(level_closing, false, false, false, false, false);
-    return owner_open == .system_panel and level_open == .tray and
-        owner_closing == .system_panel and level_closing == .tray and
-        owner_closed == .none and level_closed == .tiles;
+    const open = PresentationPolicy.next(.{}, .{
+        .card_up = true,
+        .card_wanted = true,
+        .music_present = true,
+        .panel_wanted = true,
+        .tray_wanted = true,
+    });
+    const closing = PresentationPolicy.next(open, .{ .card_up = true });
+    const closed = PresentationPolicy.next(closing, .{});
+    return open.card_owner == .system_panel and open.panel_level == .tray and
+        closing.card_owner == .system_panel and closing.panel_level == .tray and
+        closed.card_owner == .none and closed.panel_level == .tiles;
 }
 
 fn cardAnchorPolicyCheck() bool {
@@ -1190,20 +1076,20 @@ fn cardAnchorPolicyCheck() bool {
     context.motion.setAnchor(Motion.anchorForWindow(0, 0, 2560, 0));
     const resting = Motion.boxForState(.collapsed, context.motion.anchor);
     const system = systemPanelCardBox(&context);
-    const system_centre = TaskStripLayout.deckCardAnchorCentre(resting, .system_button);
+    const system_centre = BarControlLayout.deckCardAnchorCentre(resting, .system_button);
     if (@abs((system.rect.left + system.rect.right) * 0.5 - system_centre) > 0.01) return false;
 
     context.card_hang = .tray_button;
     const tray = systemPanelCardBox(&context);
-    const tray_centre = TaskStripLayout.deckCardAnchorCentre(resting, .tray_button);
+    const tray_centre = BarControlLayout.deckCardAnchorCentre(resting, .tray_button);
     if (@abs((tray.rect.left + tray.rect.right) * 0.5 - tray_centre) > 0.01) return false;
     context.card_hang = .start_button;
     const start = systemPanelCardBox(&context);
-    const start_centre = TaskStripLayout.deckCardAnchorCentre(resting, .start_button);
+    const start_centre = BarControlLayout.deckCardAnchorCentre(resting, .start_button);
     if (@abs((start.rect.left + start.rect.right) * 0.5 - start_centre) > 0.01) return false;
 
     context.card_hang = .tray_button;
-    context.tray_page_open = false;
+    TrayController.closePage(&context.tray_state);
     const closing_tray = systemPanelCardBox(&context);
     return @abs(closing_tray.rect.left - tray.rect.left) < 0.01 and
         @abs((closing_tray.rect.left + closing_tray.rect.right) * 0.5 - tray_centre) < 0.01;
@@ -1211,41 +1097,38 @@ fn cardAnchorPolicyCheck() bool {
 
 fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     const opaque_context = context orelse {
-        paintClock(window);
+        paintClock(window, null);
         return;
     };
     const paint_context: *PaintContext = @ptrCast(@alignCast(opaque_context));
+    const frame_started_ms = GetTickCount64();
+    defer paint_context.last_frame_duration_ms = GetTickCount64() -| frame_started_ms;
     var paint: PaintStruct = undefined;
     if (BeginPaint(window, &paint) == null) return;
-    var weather_reading = Weather.Reading{ .temperature_c = 0, .weather_code = -1 };
-    weather_reading.valid = weather_reader.get(&weather_reading.temperature_c, &weather_reading.weather_code);
-    var status_sky: [32]u16 = @splat(0);
-    var status_temperature: [32]u16 = @splat(0);
-    if (weather_reading.valid) Weather.weatherPiecesFor(weather_reading.temperature_c, weather_reading.weather_code, &status_sky, &status_temperature);
+    paint_context.candidate_tray_view = .{};
+    const weather_view = WeatherPage.buildView(paint_context.weather_state);
     var pill = paint_context.pill;
+    pill.line_text_mode = .scrolling;
+    pill.content_card_painter = null;
+    pill.content_card_box = null;
+    pill.content_card_reveal = 0;
     pill.box = paint_context.motion.current();
     const now = GetTickCount64();
     const active_notification = activeNotification(paint_context, now);
     const outer_card_up = paint_context.motion.target() == .expanded or paint_context.motion.visibleFromState() == .expanded;
     const panel_wanted = paint_context.system_panel_pinned or paint_context.sound_page_open or
-        paint_context.start_page_open or paint_context.tray_page_open;
-    paint_context.panel_level = CardLayout.nextPanelLevel(
-        paint_context.panel_level,
-        outer_card_up,
-        panel_wanted,
-        paint_context.tray_page_open,
-        paint_context.sound_page_open,
-        paint_context.start_page_open,
-    );
-    paint_context.card_owner = Renderer.nextCardOwner(
-        paint_context.card_owner,
-        outer_card_up,
-        paint_context.motion.target() == .expanded,
-        panel_wanted,
-        active_notification != null,
-        paint_context.active_present,
-    );
-    if (paint_context.card_owner == .notification) {
+        paint_context.start_page_open or paint_context.tray_state.page_open;
+    paint_context.presentation = PresentationPolicy.next(paint_context.presentation, .{
+        .card_up = outer_card_up,
+        .card_wanted = paint_context.motion.target() == .expanded,
+        .notification_active = active_notification != null,
+        .music_present = paint_context.music_state.active_present,
+        .panel_wanted = panel_wanted,
+        .tray_wanted = paint_context.tray_state.page_open,
+        .sound_wanted = paint_context.sound_page_open,
+        .start_wanted = paint_context.start_page_open,
+    });
+    if (paint_context.presentation.card_owner == .notification) {
         if (active_notification) |notification| {
             paint_context.notification_shown = notification.*;
             paint_context.have_notification_shown = true;
@@ -1253,27 +1136,30 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     } else {
         paint_context.have_notification_shown = false;
     }
-    const resting_state: Motion.IslandState = if (paint_context.active_present) .music_strip else .collapsed;
+    const resting_state: Motion.IslandState = if (paint_context.music_state.active_present) .music_strip else .collapsed;
     pill.resting_pill = Motion.boxForState(resting_state, paint_context.motion.anchor);
     pill.resting_state = resting_state;
-    pill.music_present = paint_context.active_present;
-    pill.music_wave_phase = paint_context.music_wave_phase;
-    pill.music_accent = .{ .r = paint_context.music_wave_accent.r, .g = paint_context.music_wave_accent.g, .b = paint_context.music_wave_accent.b, .a = 1 };
-    pill.music_level = 0;
-    pill.music_level_known = if (paint_context.audio_volume) |volume| volume.peak(&pill.music_level) else false;
+    pill.music_present = paint_context.music_state.active_present;
+    paint_context.music_strip_text.wave_phase = paint_context.music_wave_phase;
+    paint_context.music_strip_text.accent = .{ .r = paint_context.music_wave_accent.r, .g = paint_context.music_wave_accent.g, .b = paint_context.music_wave_accent.b, .a = 1 };
+    paint_context.music_strip_text.level = 0;
+    if (paint_context.sound_controller) |sound| {
+        paint_context.music_strip_text.level = sound.state.master_peak;
+        paint_context.music_strip_text.level_known = sound.state.master_available;
+    } else {
+        paint_context.music_strip_text.level_known = false;
+    }
     pill.lyric_scroll_dip = paint_context.lyric_scroll_dip;
     pill.lyric_line_roll = Lyrics.lyricLineRollFor(paint_context.lyric_line_age_seconds);
     pill.lyric_line_prev = std.mem.sliceTo(&paint_context.replaced_lyric_text, 0);
     pill.lyric_line_prev_scroll_dip = paint_context.replaced_lyric_scroll_dip;
     pill.fullscreen_app = paint_context.fullscreen_app;
-    pill.status_sky = std.mem.sliceTo(&status_sky, 0);
-    pill.status_temperature = std.mem.sliceTo(&status_temperature, 0);
-    pill.status_code = if (weather_reading.valid) weather_reading.weather_code else -1;
+    pill.status_weather = weather_view;
     pill.status_strip_opacity = paint_context.status_strip_opacity;
     if (active_notification) |notification| {
-        pill.notification = notification;
+        pill.line_text_mode = .static;
         pill.box = Motion.boxForState(.notice_strip, paint_context.motion.anchor);
-        if (notification.id == paint_context.wechat.call_notification_id) {
+        if (notification.id == callNotificationId(paint_context)) {
             pill.call_up = true;
             const process_id = paint_context.wechat.call_pid;
             if (process_id != paint_context.call_icon_pid) {
@@ -1288,6 +1174,7 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
                         &paint_context.call_icon_pixels,
                         &paint_context.call_icon_width,
                         &paint_context.call_icon_height,
+                        AppIconService.fetchFileIconPng,
                     )) |byte_count| {
                         paint_context.call_icon_size = byte_count;
                         maskCircularIcon(paint_context.call_icon_pixels[0..byte_count], paint_context.call_icon_width, paint_context.call_icon_height);
@@ -1298,9 +1185,8 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
                 @min((now - paint_context.wechat.call_start_ms) / 1000, std.math.maxInt(i32))
             else
                 0;
-            var level: f32 = 0;
-            var level_known = false;
-            if (paint_context.audio_volume) |volume| level_known = volume.peak(&level);
+            const level = if (paint_context.sound_controller) |sound| sound.state.master_peak else 0;
+            const level_known = if (paint_context.sound_controller) |sound| sound.state.master_available else false;
             pill.call_strip = .{
                 .seconds = @intCast(elapsed_seconds),
                 .level = level,
@@ -1318,12 +1204,14 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
             paint_context.notification_icon_width = 0;
             paint_context.notification_icon_height = 0;
             var icon_source: [260]u16 = @splat(0);
-            if (NotificationIcon.notificationIconSource(notification, &icon_source)) {
+            const icon_request = notification.toInput();
+            if (NotificationIcon.notificationIconSource(&icon_request, &icon_source)) {
                 if (NotificationIcon.loadNotificationIconPixels(
                     &icon_source,
                     &paint_context.notification_icon_pixels,
                     &paint_context.notification_icon_width,
                     &paint_context.notification_icon_height,
+                    AppIconService.fetchFileIconPng,
                 )) |byte_count| {
                     paint_context.notification_icon_size = byte_count;
                 }
@@ -1333,33 +1221,60 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
             std.mem.sliceTo(&notification.title, 0)
         else
             std.mem.sliceTo(&notification.body, 0);
-        pill.music_text = message;
-    } else if (paint_context.active_present) {
+        pill.line_text = message;
+    } else if (paint_context.music_state.active_present) {
         const lyric = std.mem.sliceTo(&paint_context.shown_lyric_text, 0);
-        pill.music_text = if (lyric.len != 0) lyric else std.mem.sliceTo(&paint_context.active_title, 0);
+        pill.line_text = if (lyric.len != 0) lyric else std.mem.sliceTo(&paint_context.music_state.active_title, 0);
     }
-    if ((active_notification != null or (paint_context.card_owner == .notification and paint_context.have_notification_shown)) and
+    paint_context.music_strip_text.line = if (active_notification == null) pill.line_text else &.{};
+    paint_context.music_strip_text.previous_line = std.mem.sliceTo(&paint_context.replaced_lyric_text, 0);
+    paint_context.music_strip_text.scroll_dip = paint_context.lyric_scroll_dip;
+    paint_context.music_strip_text.line_roll = Lyrics.lyricLineRollFor(paint_context.lyric_line_age_seconds);
+    paint_context.music_strip_text.previous_scroll_dip = paint_context.replaced_lyric_scroll_dip;
+    pill.feature_strip_painter = .{ .context = @ptrCast(&paint_context.music_strip_text), .paint_fn = MusicPage.paintStrip };
+    if ((active_notification != null or (paint_context.presentation.card_owner == .notification and paint_context.have_notification_shown)) and
         paint_context.notification_icon_size != 0)
     {
-        pill.notification_icon_pixels = paint_context.notification_icon_pixels[0..paint_context.notification_icon_size];
-        pill.notification_icon_width = paint_context.notification_icon_width;
-        pill.notification_icon_height = paint_context.notification_icon_height;
-        pill.notification_icon_revision = paint_context.notification_icon_revision;
+        const displayed = if (active_notification) |notification| notification else &paint_context.notification_shown;
+        paint_context.notification_card_view = .{
+            .app = std.mem.sliceTo(&displayed.app, 0),
+            .title = std.mem.sliceTo(&displayed.title, 0),
+            .body = std.mem.sliceTo(&displayed.body, 0),
+            .icon_pixels = paint_context.notification_icon_pixels[0..paint_context.notification_icon_size],
+            .icon_width = paint_context.notification_icon_width,
+            .icon_height = paint_context.notification_icon_height,
+            .icon_revision = paint_context.notification_icon_revision,
+        };
+    } else {
+        const displayed = if (active_notification) |notification| notification else if (paint_context.have_notification_shown) &paint_context.notification_shown else null;
+        if (displayed) |notification| {
+            paint_context.notification_card_view = .{
+                .app = std.mem.sliceTo(&notification.app, 0),
+                .title = std.mem.sliceTo(&notification.title, 0),
+                .body = std.mem.sliceTo(&notification.body, 0),
+            };
+        } else {
+            paint_context.notification_card_view = .{};
+        }
     }
     const notice_active = active_notification != null;
     if (outer_card_up) {
         const reveal = Motion.outerCardRevealDip(Geometry.height(paint_context.motion.current().rect));
-        switch (paint_context.card_owner) {
+        switch (paint_context.presentation.card_owner) {
             .none => {},
             .notification => {
                 if (!notice_active) pill.box = Motion.boxForState(.collapsed, paint_context.motion.anchor);
-                pill.card_notification = if (paint_context.have_notification_shown) &paint_context.notification_shown else null;
-                pill.notification_card_box = notificationCardBox(paint_context);
-                pill.notification_card_reveal = reveal;
+                if (paint_context.have_notification_shown) {
+                    pill.content_card_painter = NotificationPage.painter(&paint_context.notification_card_view);
+                    pill.content_card_box = notificationCardBox(paint_context);
+                    pill.content_card_reveal = reveal;
+                }
             },
             .music => {
                 pill.box = paint_context.motion.current();
-                pill.music_card = &paint_context.music_card_text;
+                pill.feature_page_painter = .{ .context = @ptrCast(&paint_context.music_card_text), .paint_fn = MusicPage.paintCard };
+                pill.feature_page_box = pill.box;
+                pill.feature_page_reveal = reveal;
             },
             .system_panel => {
                 pill.box = if (notice_active)
@@ -1367,39 +1282,42 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
                 else
                     Motion.boxForState(.collapsed, paint_context.motion.anchor);
                 const card = systemPanelCardBox(paint_context);
-                switch (paint_context.panel_level) {
+                switch (paint_context.presentation.panel_level) {
                     .sound => {
-                        pill.sound_page = &paint_context.sound_page_text;
-                        pill.sound_page_box = card;
-                        pill.sound_page_reveal = reveal;
+                        pill.feature_page_painter = .{ .context = @ptrCast(paint_context), .paint_fn = paintSoundPage };
+                        pill.feature_page_box = card;
+                        pill.feature_page_reveal = reveal;
                     },
                     .start => {
-                        pill.start_page = &paint_context.start_card_text;
-                        pill.start_page_box = card;
-                        pill.start_page_reveal = reveal;
+                        pill.feature_page_painter = .{ .context = @ptrCast(&paint_context.start_card_text), .paint_fn = LauncherPage.paint };
+                        pill.feature_page_box = card;
+                        pill.feature_page_reveal = reveal;
                     },
                     .tray => {
-                        pill.tray_page_open = true;
-                        pill.tray_page_title = wide_tray_page;
-                        pill.tray_page_icons = paint_context.tray_page_icons[0..paint_context.tray_page_icon_count];
-                        pill.tray_page_revision = paint_context.tray_page_revision;
-                        pill.tray_page_hovered_index = paint_context.tray_hovered_index;
-                        pill.system_panel_box = card;
-                        pill.system_panel_reveal = reveal;
-                        pill.tray_menu_open = paint_context.tray_menu_open;
-                        pill.tray_menu_rows = paint_context.tray_menu_layout.rows;
-                        pill.tray_menu_row_count = paint_context.tray_menu_action_count;
-                        pill.tray_menu_hovered = paint_context.tray_menu_hovered;
-                        for (0..paint_context.tray_menu_action_count) |index| {
-                            const action = paint_context.tray_menu_actions[index];
-                            pill.tray_menu_labels[index] = if (paint_context.tray_quit_armed and action == .quit_application)
-                                CardLayout.trayMenuArmedLabel(action).ptr
-                            else
-                                CardLayout.trayMenuLabel(action).ptr;
-                        }
+                        const menu = if (paint_context.tray_state.menu_open and paint_context.tray_state.selected != null) blk: {
+                            const selected = paint_context.tray_state.selected.?;
+                            const cell_index: usize = selected.index;
+                            if (cell_index < paint_context.tray_page_icon_count) {
+                                const tray_layout = TrayPage.layoutFor(card, @intCast(paint_context.tray_page_icon_count));
+                                const cell = tray_layout.cells[cell_index];
+                                break :blk TrayPage.menuFor(card, cell.right, cell.bottom, @intCast(paint_context.tray_state.menu_count));
+                            }
+                            break :blk TrayPage.MenuLayout{};
+                        } else TrayPage.MenuLayout{};
+                        paint_context.candidate_tray_view = TrayPage.buildView(card, paint_context.tray_page_icon_count, paint_context.tray_page_revision, menu);
+                        paint_context.tray_card_text.view = paint_context.candidate_tray_view;
+                        paint_context.tray_card_text.icons = paint_context.tray_page_icons[0..paint_context.tray_page_icon_count];
+                        paint_context.tray_card_text.hovered_icon = paint_context.tray_state.hovered_icon;
+                        paint_context.tray_card_text.menu_actions = paint_context.tray_state.menu_actions[0..paint_context.tray_state.menu_count];
+                        paint_context.tray_card_text.hovered_menu_row = paint_context.tray_state.hovered_menu_row;
+                        paint_context.tray_card_text.quit_armed = paint_context.tray_state.quit_armed;
+                        pill.feature_page_painter = .{ .context = @ptrCast(&paint_context.tray_card_text), .paint_fn = TrayPage.paint };
+                        pill.feature_page_box = card;
+                        pill.feature_page_reveal = reveal;
                     },
                     .tiles => {
-                        pill.system_panel = &paint_context.system_panel_text;
+                        SystemPage.updateLayout(&paint_context.system_panel_view, card);
+                        pill.system_panel = &paint_context.system_panel_view.presentation;
                         pill.system_panel_box = card;
                         pill.system_panel_reveal = reveal;
                     },
@@ -1411,14 +1329,17 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     @memset(&paint_context.task_buttons, .{});
     for (paint_context.task_windows.entries[0..task_count], 0..) |*entry, index| {
         paint_context.task_buttons[index] = .{
+            .window_id = entry.id,
+            .process_id = entry.process_id,
+            .process_created_at = entry.process_created_at,
             .title = @ptrCast(&entry.title),
             .window = entry.handle,
             .active = entry.handle == paint_context.task_windows.foreground,
             .minimised = entry.iconic,
             .fill = pill.fill,
-            .hover_amount = paint_context.task_hover_amount[index],
+            .hover_amount = paint_context.taskbar_state.hoverAmount(entry.id),
+            .appear_amount = 1,
         };
-        paint_context.task_button_appear[index] = 1;
     }
     const resting_deck = Motion.boxForState(.collapsed, paint_context.motion.anchor);
     const deck_island = Motion.rowAnchorBox(pill.box, resting_deck);
@@ -1426,32 +1347,64 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
     pill.deck_box = deck_island;
     const active_theme = Theme.currentTheme();
     pill.fill = .{ active_theme.pill_bottom.r, active_theme.pill_bottom.g, active_theme.pill_bottom.b, active_theme.pill_bottom.a };
-    pill.surface_box = TaskStripLayout.barClusterFor(deck_island, tray_visible);
+    pill.surface_box = BarControlLayout.barClusterFor(deck_island, tray_visible);
     if (paint_context.fullscreen_app) {
         pill.surface_box = if (notice_active) pill.box else null;
         if (!notice_active) pill.opacity = 0;
     }
     pill.start_hover = paint_context.start_button_wash;
-    const panel_controls_lit = CardLayout.controlLitFor(paint_context.panel_level, outer_card_up and paint_context.card_owner == .system_panel);
+    const panel_controls_lit = PresentationPolicy.controlLitFor(paint_context.presentation, outer_card_up);
     pill.start_open = panel_controls_lit.start;
     pill.system_hover = paint_context.system_button_wash;
     pill.system_open = panel_controls_lit.system;
     pill.tray_visible = tray_visible;
     pill.tray_hover = paint_context.tray_button_wash;
     pill.tray_open = panel_controls_lit.tray;
-    pill.task_island = TaskStripLayout.rowAnchorWithTray(deck_island, tray_visible);
-    pill.task_buttons = paint_context.task_buttons[0..task_count];
-    pill.task_button_appear = paint_context.task_button_appear[0..task_count];
-    pill.task_hovered_index = paint_context.task_hovered_index;
-    if (outer_card_up and paint_context.card_owner == .system_panel) {
+    const task_island = TaskbarLayout.rowAnchorWithTray(deck_island, tray_visible);
+    var task_card_left: f32 = 0;
+    var task_card_width: f32 = 0;
+    if (outer_card_up and paint_context.presentation.card_owner == .system_panel) {
         const card = systemPanelCardBox(paint_context);
-        pill.task_card_left_dip = card.rect.left;
-        pill.task_card_width_dip = Geometry.width(card.rect);
-    } else {
-        pill.task_card_left_dip = 0;
-        pill.task_card_width_dip = 0;
+        task_card_left = card.rect.left;
+        task_card_width = Geometry.width(card.rect);
     }
-    _ = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact, weather_reading);
+    paint_context.candidate_taskbar_view = TaskbarPage.buildView(
+        task_island,
+        paint_context.task_buttons[0..task_count],
+        paint_context.candidate_taskbar_snapshot.revision,
+        paint_context.taskbar_state.hover_generation,
+        task_card_left,
+        task_card_width,
+        paint_context.taskbar_state.hovered_id,
+    );
+    pill.taskbar_view = &paint_context.candidate_taskbar_view;
+    paint_context.candidate_sound_layout = buildSoundLayoutSnapshot(paint_context, pill);
+    paint_context.candidate_music_layout = buildMusicLayoutSnapshot(paint_context, pill);
+    paint_context.candidate_launcher_layout = buildLauncherLayoutSnapshot(paint_context, pill);
+    if (paint_context.candidate_tray_view.snapshot.valid) paint_context.tray_card_text.view = paint_context.candidate_tray_view;
+    if (paint_context.candidate_launcher_layout.snapshot.valid) paint_context.start_card_text.view = paint_context.candidate_launcher_layout;
+    pill.feature_layout_snapshot = if (paint_context.candidate_music_layout.valid)
+        &paint_context.candidate_music_layout
+    else if (paint_context.candidate_sound_layout.valid)
+        &paint_context.candidate_sound_layout
+    else if (paint_context.candidate_tray_view.snapshot.valid)
+        &paint_context.candidate_tray_view.snapshot
+    else if (paint_context.candidate_launcher_layout.snapshot.valid)
+        &paint_context.candidate_launcher_layout.snapshot
+    else
+        null;
+    if (paint_context.renderer.generation != paint_context.renderer_generation) {
+        paint_context.text_renderer.invalidateDeviceResources();
+        paint_context.renderer_generation = paint_context.renderer.generation;
+    }
+    if (!paint_context.renderer.isReady()) _ = recoverGraphicsDevice(paint_context, GetTickCount64());
+    const rendered = paint_context.renderer.renderPill(pill, paint_context.text_renderer, .compact);
+    LayoutSnapshot.publishAfterSuccessfulFrame(&paint_context.presented_sound_layout, paint_context.candidate_sound_layout, rendered);
+    LayoutSnapshot.publishAfterSuccessfulFrame(&paint_context.presented_music_layout, paint_context.candidate_music_layout, rendered);
+    if (rendered) paint_context.presented_launcher_layout = paint_context.candidate_launcher_layout;
+    if (rendered) paint_context.presented_tray_view = paint_context.candidate_tray_view;
+    if (rendered) paint_context.presented_taskbar_view = paint_context.candidate_taskbar_view;
+    if (!rendered and paint_context.renderer.lastFailureIsDeviceLoss()) _ = recoverGraphicsDevice(paint_context, GetTickCount64());
     _ = EndPaint(window, &paint);
     _ = updateInputRegion(paint_context);
     if (paint_context.motion.isAnimating()) _ = paint_context.renderer.waitForCompositorClock(8);
@@ -1459,47 +1412,53 @@ fn paintWindow(window: HWND, context: ?*anyopaque) callconv(.winapi) void {
 
 fn taskButtonCount(context: *const PaintContext) usize {
     const monitor_width_dip = @as(f32, @floatFromInt(window_width_px)) / @max(context.scale, 0.01);
-    return TaskStripLayout.taskIconsThatFitForMonitor(monitor_width_dip, context.task_windows.count);
+    return TaskbarLayout.taskIconsThatFitForMonitor(monitor_width_dip, context.task_windows.count);
 }
 
-fn updateTaskThumbnailPreview(context: *PaintContext, island: Geometry.RoundedBox, count: usize, now: u64) void {
+fn updateTaskThumbnailPreview(context: *PaintContext, now: u64) void {
     const preview = context.thumbnail_preview orelse return;
-    const index = context.task_hovered_index;
-    const wanted = if (index >= 0 and @as(usize, @intCast(index)) < count)
-        context.task_windows.entries[@intCast(index)].handle
-    else
-        null;
-    if (wanted != context.thumbnail_target) {
-        context.thumbnail_target = wanted;
+    const wanted_id = context.taskbar_state.hovered_id;
+    if (wanted_id != context.thumbnail_target_id) {
+        context.thumbnail_target_id = wanted_id;
         context.thumbnail_target_since_ms = now;
     }
-    const rested = wanted != null and now -| context.thumbnail_target_since_ms >= 350;
-    const follow = wanted != null and preview.visible;
+    const rested = wanted_id != null and now -| context.thumbnail_target_since_ms >= 350;
+    const follow = wanted_id != null and preview.visible;
     const card_up = context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded;
     var shown = false;
-    if ((rested or follow) and !card_up and !context.fullscreen_app and wanted != null) {
-        const target = wanted.?;
-        if (IsWindow(target) != 0) {
-            const monitor = context.monitor_bounds;
-            const button = TaskStripLayout.taskIconButtonAtAmounts(island, @intCast(index), count, &context.task_hover_amount, 0, 0);
-            const icon_px = ThumbnailPreview.Rect{
-                .left = monitor.left + @as(i32, @intFromFloat(@round(button.left * context.scale))),
-                .top = monitor.top + @as(i32, @intFromFloat(@round(button.top * context.scale))),
-                .right = monitor.left + @as(i32, @intFromFloat(@round(button.right * context.scale))),
-                .bottom = monitor.top + @as(i32, @intFromFloat(@round(button.bottom * context.scale))),
-            };
-            const source_size = preview.begin(target);
-            const placement = ThumbnailPreview.thumbnailBoxFor(
-                source_size.cx,
-                source_size.cy,
-                icon_px,
-                .{ .left = monitor.left, .top = monitor.top, .right = monitor.right, .bottom = monitor.bottom },
-                context.scale,
-            );
-            shown = placement.valid and preview.place(&placement);
-            if (preview.refusals != context.thumbnail_reported_refusals) {
-                context.thumbnail_reported_refusals = preview.refusals;
-                logFormatted("thumbnail: compositor refused task window (HRESULT=0x{x})", .{@as(u64, @bitCast(preview.last_result))});
+    if ((rested or follow) and !card_up and !context.fullscreen_app) {
+        if (wanted_id) |id| {
+            const request = TaskbarCatalog.Request{ .id = id, .catalog_revision = context.presented_taskbar_view.catalog_revision };
+            if (context.task_windows.handleForIdentity(request)) |target| {
+                var presented_button: ?TextRenderer.TaskButton = null;
+                for (context.presented_taskbar_view.buttons[0..context.presented_taskbar_view.count]) |button| {
+                    if (button.window_id == id) {
+                        presented_button = button;
+                        break;
+                    }
+                }
+                if (presented_button) |button| {
+                    const monitor = context.monitor_bounds;
+                    const icon_px = ThumbnailLayout.Rect{
+                        .left = monitor.left + @as(i32, @intFromFloat(@round(button.bounds.left * context.scale))),
+                        .top = monitor.top + @as(i32, @intFromFloat(@round(button.bounds.top * context.scale))),
+                        .right = monitor.left + @as(i32, @intFromFloat(@round(button.bounds.right * context.scale))),
+                        .bottom = monitor.top + @as(i32, @intFromFloat(@round(button.bounds.bottom * context.scale))),
+                    };
+                    const source_size = preview.begin(target);
+                    const placement = ThumbnailLayout.thumbnailBoxFor(
+                        source_size.cx,
+                        source_size.cy,
+                        icon_px,
+                        .{ .left = monitor.left, .top = monitor.top, .right = monitor.right, .bottom = monitor.bottom },
+                        context.scale,
+                    );
+                    shown = placement.valid and preview.place(&placement);
+                    if (preview.refusals != context.thumbnail_reported_refusals) {
+                        context.thumbnail_reported_refusals = preview.refusals;
+                        logFormatted("thumbnail: compositor refused task window (HRESULT=0x{x})", .{@as(u64, @bitCast(preview.last_result))});
+                    }
+                }
             }
         }
     }
@@ -1508,6 +1467,60 @@ fn updateTaskThumbnailPreview(context: *PaintContext, island: Geometry.RoundedBo
 
 fn pointInBox(box: Geometry.RoundedBox, x: f32, y: f32) bool {
     return Geometry.containsWithTolerance(box, x, y, Geometry.hit_tolerance_dip);
+}
+
+fn taskbarRowContains(view: TaskbarPage.View, x: f32, y: f32) bool {
+    const bounds = view.row_bounds;
+    return bounds.right > bounds.left and bounds.bottom > bounds.top and
+        x >= bounds.left and x <= bounds.right and y >= bounds.top and y <= bounds.bottom;
+}
+
+fn soundPageViewModel(context: *const PaintContext) ?SoundPage.ViewModel {
+    const sound = context.sound_controller orelse return null;
+    return .{ .state = &sound.state, .scroll = context.sound_page_state.scroll, .tokens = Theme.currentTheme().tokens };
+}
+
+fn paintSoundPage(raw_context: ?*anyopaque, backend: *TextRenderer.TextRenderer, draw_context: ?*anyopaque, card: *const Geometry.RoundedBox, opacity: f32, snapshot: ?*const LayoutSnapshot.Snapshot) callconv(.c) bool {
+    const raw = raw_context orelse return false;
+    const context: *PaintContext = @ptrCast(@alignCast(raw));
+    const model = soundPageViewModel(context) orelse return false;
+    return SoundPage.draw(backend, draw_context, card.*, &model, snapshot, opacity);
+}
+
+fn buildSoundLayoutSnapshot(context: *PaintContext, pill: Renderer.PillAppearance) LayoutSnapshot.Snapshot {
+    context.layout_snapshot_generation +%= 1;
+    const transform = LayoutSnapshot.ScreenTransform{
+        .window_left_px = context.window_x,
+        .window_top_px = context.window_y,
+        .pixels_per_dip = context.scale,
+    };
+    const card = pill.feature_page_box orelse return .{ .generation = context.layout_snapshot_generation, .screen_transform = transform };
+    const model = soundPageViewModel(context) orelse return .{ .generation = context.layout_snapshot_generation, .screen_transform = transform };
+    return SoundPage.buildLayoutSnapshot(card, &model, pill.feature_page_reveal, context.layout_snapshot_generation, transform);
+}
+
+fn buildMusicLayoutSnapshot(context: *PaintContext, pill: Renderer.PillAppearance) LayoutSnapshot.Snapshot {
+    if (context.presentation.card_owner != .music) return .{};
+    context.layout_snapshot_generation +%= 1;
+    const transform = LayoutSnapshot.ScreenTransform{
+        .window_left_px = context.window_x,
+        .window_top_px = context.window_y,
+        .pixels_per_dip = context.scale,
+    };
+    const card = pill.feature_page_box orelse return .{ .generation = context.layout_snapshot_generation, .screen_transform = transform };
+    return MusicPage.buildLayoutSnapshot(card, context.layout_snapshot_generation, transform, pill.feature_page_reveal);
+}
+
+fn buildLauncherLayoutSnapshot(context: *PaintContext, pill: Renderer.PillAppearance) LauncherPage.View {
+    if (!context.start_page_open or context.presentation.panel_level != .start) return .{};
+    context.layout_snapshot_generation +%= 1;
+    const card = pill.feature_page_box orelse return .{};
+    const apps = context.start_apps;
+    const pin_count = if (apps) |service| service.pinCount() else 0;
+    const app_count = if (apps) |service| service.listCount() else 0;
+    var view = LauncherPage.buildView(card, context.launcher_state.page, pin_count, app_count, context.launcher_state.picker_scroll_row, pill.feature_page_reveal, context.layout_snapshot_generation);
+    view.snapshot.screen_transform = .{ .window_left_px = context.window_x, .window_top_px = context.window_y, .pixels_per_dip = context.scale };
+    return view;
 }
 
 fn notificationCardBox(context: *const PaintContext) Geometry.RoundedBox {
@@ -1520,21 +1533,21 @@ fn notificationCardBox(context: *const PaintContext) Geometry.RoundedBox {
 fn systemPanelCardBox(context: *const PaintContext) Geometry.RoundedBox {
     const screen_width_dip = @as(f32, @floatFromInt(window_width_px)) / @max(context.scale, 0.01);
     const resting = Motion.boxForState(.collapsed, context.motion.anchor);
-    const hang: TaskStripLayout.CardHang = if (context.start_page_open)
+    const hang: BarControlLayout.CardHang = if (context.start_page_open)
         .start_button
-    else if (context.tray_page_open)
+    else if (context.tray_state.page_open)
         .tray_button
     else
         context.card_hang;
-    const centre = TaskStripLayout.deckCardAnchorCentre(resting, hang);
+    const centre = BarControlLayout.deckCardAnchorCentre(resting, hang);
     const left = CardLayout.cardLeftFor(centre - Motion.expanded_width_dip * 0.5, Motion.expanded_width_dip, screen_width_dip);
     return Motion.placedCardFor(resting, left);
 }
 
 fn updateInputRegion(context: *PaintContext) bool {
     const window = context.window orelse return false;
-    const card_up = (context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded) and context.card_owner != .none;
-    const card = switch (context.card_owner) {
+    const card_up = (context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded) and context.presentation.card_owner != .none;
+    const card = switch (context.presentation.card_owner) {
         .notification => notificationCardBox(context),
         .music => Motion.placedCardFor(Motion.boxForState(.collapsed, context.motion.anchor), CardLayout.cardLeftFor(
             context.motion.anchor.center_x - Motion.expanded_width_dip * 0.5,
@@ -1552,8 +1565,8 @@ fn updateInputRegion(context: *PaintContext) bool {
         .current = context.motion.current(),
         .card_up = card_up,
         .card_left_dip = if (card_up) card.rect.left else 0,
-        .task_icon_count = @intCast(taskButtonCount(context)),
-        .status_strip_width_dip = if (context.status_strip_opacity > 0.001) TaskStripLayout.status_strip_width_dip else 0,
+        .task_row_bounds = context.presented_taskbar_view.row_bounds,
+        .status_strip_width_dip = if (context.status_strip_opacity > 0.001) BarControlLayout.status_strip_width_dip else 0,
         .tray_icon_count = tray_count,
     });
     const ok = window.setInputRegion(.{ .left = region.left, .top = region.top, .right = region.right, .bottom = region.bottom });
@@ -1563,7 +1576,7 @@ fn updateInputRegion(context: *PaintContext) bool {
 
 fn sampleSystemStatus(context: *PaintContext, now: u64) bool {
     var refreshed = false;
-    if (SystemToggles.takeRadioOutcome()) |outcome| {
+    if (SystemService.takeRadioOutcome()) |outcome| {
         const verdict = if (outcome.succeeded) "as asked" else "NOT as asked";
         const refused = if (outcome.hresult != 0) " (radio call refused or failed)" else "";
         if (outcome.wifi_asked and outcome.bluetooth_asked) {
@@ -1573,93 +1586,100 @@ fn sampleSystemStatus(context: *PaintContext, now: u64) bool {
         } else {
             logFormatted("radios: Bluetooth {s} -- {s}{s}", .{ if (outcome.bluetooth_now) "on" else "off", verdict, refused });
         }
-        if (context.status_reader) |reader| reader.sample(&context.system_status);
+        sampleSystemSnapshot(context);
         context.status_sampled_ms = GetTickCount64();
         refreshed = true;
     }
-    if (SystemToggles.takeNightLightOutcome()) |outcome| {
+    if (SystemService.takeNightLightOutcome()) |outcome| {
         logFormatted("night light: asked for {s}; it is now {s} ({s})", .{ if (outcome.wanted) "on" else "off", if (outcome.state_after) "on" else "off", if (outcome.state_after == outcome.wanted and outcome.succeeded) "it took" else "IT DID NOT CHANGE" });
-        if (context.status_reader) |reader| reader.sample(&context.system_status);
+        sampleSystemSnapshot(context);
         context.status_sampled_ms = GetTickCount64();
         refreshed = true;
     }
     if (context.status_sampled_ms == 0 or now -| context.status_sampled_ms >= 2000) {
-        if (context.status_reader) |reader| {
-            reader.sample(&context.system_status);
-            context.installed_layout_count = reader.layoutCount();
-        }
-        context.brightness_available = DisplayBrightness.readBrightnessPercent(context.monitor, &context.brightness_percent);
+        if (context.status_reader != null) sampleSystemSnapshot(context);
+        var brightness = context.system_state.brightness_percent;
+        const brightness_available = SystemService.readBrightness(context.monitor, &brightness);
+        context.system_state.updateBrightness(brightness_available, brightness);
         context.status_sampled_ms = now;
         refreshed = true;
     }
-    if (context.audio_volume) |volume| {
-        var level = context.volume_level;
-        if (volume.get(&level)) context.volume_level = level;
-        context.volume_muted = volume.isMuted();
-    }
-    if (context.sound_output) |sound| {
-        const revision = sound.revision();
-        if (revision != context.last_sound_revision) {
-            context.last_sound_revision = revision;
-            context.sound_snapshot = sound.snapshot();
-            refreshed = true;
+    if (context.sound_controller) |sound| {
+        if (context.sound_ports) |ports| {
+            if (ports.audio_volume) |volume| {
+                var level = sound.state.master_level;
+                _ = volume.get(&level);
+                var peak = sound.state.master_peak;
+                _ = volume.peak(&peak);
+                sound.updateMaster(volume.available(), level, volume.isMuted(), peak, volume.getRevision());
+                while (volume.takeResult()) |result| {
+                    const disposition = sound.applyResult(result);
+                    traceSoundResult(context, result.token, @tagName(result.operation), @tagName(disposition), result.hresult);
+                }
+            }
+            if (ports.audio_service) |service| {
+                const before = sound.state.revision;
+                sound.updateOutput(service.snapshot());
+                while (service.takeResult()) |result| {
+                    const disposition = sound.applyResult(result);
+                    traceSoundResult(context, result.token, @tagName(result.operation), @tagName(disposition), result.hresult);
+                }
+                if (sound.state.revision != before) refreshed = true;
+            }
         }
+        if (sound.expire(now)) refreshed = true;
     }
-    context.system_status.volume_percent = @intFromFloat(@round(context.volume_level * 100));
-    context.system_status.muted = context.volume_muted;
     buildSystemPanelText(context);
-    buildSoundPageText(context);
     return refreshed;
 }
 
+fn sampleSystemSnapshot(context: *PaintContext) void {
+    if (context.status_reader) |reader| {
+        var snapshot = context.system_state.status;
+        reader.sample(&snapshot);
+        context.system_state.updateStatus(snapshot, reader.layoutCount());
+    }
+}
+
 fn handleSystemPanelClick(context: *PaintContext, local_x: f32, local_y: f32) bool {
-    const hit = CardLayout.systemPanelHitFor(
-        systemPanelCardBox(context),
-        @intCast(context.system_panel_text.tile_count),
-        if (context.brightness_available) 2 else 1,
-        context.system_panel_text.page_index,
-        context.system_panel_text.page_count,
-        local_x,
-        local_y,
-    );
+    const hit = SystemPage.hitFor(&context.system_panel_view, local_x, local_y);
     switch (hit.target) {
-        .page_up => context.system_panel_page = @mod(context.system_panel_page - 1 + context.system_panel_text.page_count, context.system_panel_text.page_count),
-        .page_down => context.system_panel_page = @mod(context.system_panel_page + 1, context.system_panel_text.page_count),
-        .speaker => if (context.audio_volume) |volume| volume.toggleMute(),
+        .page_up => context.system_state.advancePage(-1, context.system_panel_view.presentation.page_count),
+        .page_down => context.system_state.advancePage(1, context.system_panel_view.presentation.page_count),
+        .speaker => {
+            if (context.sound_controller) |sound| _ = dispatchSoundAction(context, .{ .set_master_muted = !sound.state.displayedMuted() });
+        },
         .volume_device => {
             context.sound_page_open = true;
-            context.tray_page_open = false;
+            TrayController.closePage(&context.tray_state);
             context.start_page_open = false;
             context.card_hang = .system_button;
-            context.sound_page_scroll = 0;
+            context.sound_page_state.scroll = 0;
         },
-        .gear => _ = StartMenu.openUri(uri_settings),
+        .gear => _ = ShellCommand.openUri(uri_settings),
         .slider => {
             if (hit.index == 0) {
-                if (context.audio_volume) |volume| volume.setLevel(hit.fraction);
-                context.volume_level = hit.fraction;
-            } else if (hit.index == 1 and context.brightness_available) {
-                var landed: i32 = context.brightness_percent;
+                _ = dispatchSoundAction(context, .{ .set_master_volume = hit.fraction });
+            } else if (hit.index == 1 and context.system_state.brightness_available) {
+                var landed: i32 = context.system_state.brightness_percent;
                 const wanted: i32 = @intFromFloat(@round(hit.fraction * 100));
-                if (DisplayBrightness.setBrightnessPercent(context.monitor, wanted, &landed)) context.brightness_percent = landed;
+                const succeeded = SystemService.setBrightness(context.monitor, wanted, &landed);
+                context.system_state.confirmBrightness(succeeded, landed);
             }
         },
         .tile => {
-            if (hit.index < 0 or hit.index >= context.system_panel_text.tile_count) return false;
-            const tile = context.system_panel_text.tiles[@intCast(hit.index)];
-            switch (tile.action) {
-                .open_settings => {
-                    if (tile.uri) |uri| _ = StartMenu.openUri(uri);
-                },
+            const action = SystemPage.actionAt(&context.system_panel_view, hit.index) orelse return false;
+            switch (action) {
+                .open_settings => |target| _ = ShellCommand.openUri(SystemPage.settingsUri(target)),
                 .open_sound_page => {
                     context.sound_page_open = true;
-                    context.tray_page_open = false;
+                    TrayController.closePage(&context.tray_state);
                     context.start_page_open = false;
                     context.card_hang = .system_button;
-                    context.sound_page_scroll = 0;
+                    context.sound_page_state.scroll = 0;
                 },
                 .open_tray_page => {
-                    context.tray_page_open = true;
+                    TrayController.openPage(&context.tray_state, context.tray_page_revision);
                     context.sound_page_open = false;
                     context.start_page_open = false;
                     context.card_hang = .tray_button;
@@ -1672,114 +1692,182 @@ fn handleSystemPanelClick(context: *PaintContext, local_x: f32, local_y: f32) bo
                 .open_start_page => {
                     context.start_page_open = true;
                     context.sound_page_open = false;
-                    context.tray_page_open = false;
+                    TrayController.closePage(&context.tray_state);
                     context.card_hang = .start_button;
-                    context.start_page_state = 0;
-                    context.start_power_confirm_row = -1;
+                    context.launcher_state.page = .pins;
+                    context.launcher_state.power_confirm_row = -1;
                     if (context.start_apps) |apps| _ = apps.refreshList();
                     buildStartCardText(context);
                 },
-                .toggle_live_captions => logFormatted("live captions: Win+Ctrl+L queued={d}", .{@intFromBool(SystemToggles.toggleLiveCaptions())}),
-                .cycle_theme => _ = Theme.cycleTheme(),
+                .toggle_live_captions => logFormatted("live captions: Win+Ctrl+L queued={d}", .{@intFromBool(SystemService.toggleLiveCaptions())}),
+                .cycle_theme => _ = Theme.cycleTheme(Log.logLine),
                 .toggle_wifi => {
-                    const on = !context.system_status.wifi_radio_on;
-                    const started = SystemToggles.requestRadios(true, false, on);
+                    const on = !context.system_state.status.wifi_radio_on;
+                    const started = SystemService.requestRadios(true, false, on);
                     logFormatted("Wi-Fi radio: asked to switch {s}; worker started={d}", .{ if (on) "on" else "off", @intFromBool(started) });
                 },
                 .toggle_bluetooth => {
-                    const on = !context.system_status.bluetooth_on;
-                    const started = SystemToggles.requestRadios(false, true, on);
+                    const on = !context.system_state.status.bluetooth_on;
+                    const started = SystemService.requestRadios(false, true, on);
                     logFormatted("Bluetooth radio: asked to switch {s}; worker started={d}", .{ if (on) "on" else "off", @intFromBool(started) });
                 },
                 .toggle_radio => {
-                    const on = !(context.system_status.wifi_radio_on or context.system_status.bluetooth_on);
-                    const started = SystemToggles.requestRadios(true, true, on);
+                    const on = !(context.system_state.status.wifi_radio_on or context.system_state.status.bluetooth_on);
+                    const started = SystemService.requestRadios(true, true, on);
                     logFormatted("airplane mode: asked for Wi-Fi and Bluetooth {s}; worker started={d}", .{ if (on) "on" else "off", @intFromBool(started) });
                 },
                 .toggle_night_light => {
-                    const on = !context.system_status.night_light_on;
-                    const started = SystemToggles.requestNightLight(on);
+                    const on = !context.system_state.status.night_light_on;
+                    const started = SystemService.requestNightLight(on);
                     logFormatted("night light: asked to switch {s} through Settings; worker started={d}", .{ if (on) "on" else "off", @intFromBool(started) });
                 },
-                .projection_modes => _ = StartMenu.sendWindowsKeyChord('P'),
-                .toggle_mute => if (context.audio_volume) |volume| volume.toggleMute(),
+                .projection_modes => _ = ShellCommand.sendWindowsKeyChord('P'),
                 .none => return false,
             }
         },
         .none => return false,
     }
     _ = sampleSystemStatus(context, 0);
-    buildSoundPageText(context);
     if (context.window) |window| window.invalidate();
     return true;
 }
 
-fn setMixerLevel(context: *PaintContext, row: i32, fraction_arg: f32) void {
-    const fraction = std.math.clamp(fraction_arg, 0, 1);
-    if (row == 0) {
-        if (context.audio_volume) |volume| volume.setLevel(fraction);
-        context.volume_level = fraction;
-        context.mixer_drag_pid = 0;
-    } else if (row > 0) {
-        const session_index: usize = @intCast(row - 1);
-        if (session_index >= context.sound_snapshot.session_count) return;
-        const session = context.sound_snapshot.sessions[session_index];
-        context.mixer_drag_pid = session.pid;
-        if (context.sound_output) |sound| sound.setSessionVolume(session.pid, fraction);
-    } else return;
-    context.mixer_drag_row = row;
-    buildSoundPageText(context);
+fn setMixerLevel(context: *PaintContext, row: i32, fraction_arg: f32) SoundController.Dispatch {
+    const model = soundPageViewModel(context) orelse return .unavailable;
+    const action = SoundPage.volumeAction(&model, &context.presented_sound_layout, row, fraction_arg) orelse return .stale_target;
+    return dispatchSoundAction(context, action);
 }
 
-fn handleSoundPageClick(context: *PaintContext, local_x: f32, local_y: f32) bool {
-    const card = systemPanelCardBox(context);
-    const device_count: i32 = @intCast(context.sound_page_text.device_count);
-    const mix_count: i32 = @intCast(context.sound_page_text.mix_count);
-    const hit = CardLayout.soundPageHitFor(card, device_count, mix_count, context.sound_page_scroll, local_x, local_y);
-    switch (hit.target) {
-        .back => {
-            context.sound_page_open = false;
-            context.mixer_drag_row = -1;
+fn traceInputAction(
+    context: *PaintContext,
+    element_id: LayoutSnapshot.ElementId,
+    element_index: i32,
+    layout_generation: u64,
+    action_name: []const u8,
+    dispatch: ?SoundController.Dispatch,
+) void {
+    if (!context.trace_ui_enabled) return;
+    const sound = context.sound_controller orelse return;
+    var operation_id: u64 = 0;
+    switch (dispatch orelse .unavailable) {
+        .queued, .duplicate => if (sound.state.pending) |pending| {
+            operation_id = pending.token;
         },
-        .device => {
-            if (hit.index >= 0 and @as(usize, @intCast(hit.index)) < context.sound_snapshot.device_count) {
-                const device = &context.sound_snapshot.devices[@intCast(hit.index)];
-                if (!device.is_default) {
-                    if (context.sound_output) |sound| {
-                        sound.setDefaultDevice(std.mem.sliceTo(&device.id, 0));
-                        sound.refresh();
-                    }
-                }
+        .failed => if (sound.state.last_error) |failure| {
+            operation_id = failure.token;
+        },
+        else => {},
+    }
+    var bounds = Diagnostics.TraceRect{};
+    var hit_region = Diagnostics.TraceRect{};
+    for (context.presented_sound_layout.elements[0..context.presented_sound_layout.count]) |element| {
+        if (element.id != element_id or element.index != element_index) continue;
+        bounds = .{ .left = element.bounds.left, .top = element.bounds.top, .right = element.bounds.right, .bottom = element.bounds.bottom };
+        hit_region = .{ .left = element.hit_region.left, .top = element.hit_region.top, .right = element.hit_region.right, .bottom = element.hit_region.bottom };
+        break;
+    }
+    const snapshot = context.presented_sound_layout;
+    var hresult: i32 = 0;
+    if (sound.state.last_error) |failure| if (failure.token == operation_id) {
+        hresult = failure.hresult;
+    };
+    Diagnostics.logUiTrace(true, .{
+        .operation_id = operation_id,
+        .element = @tagName(element_id),
+        .element_index = element_index,
+        .layout_generation = layout_generation,
+        .action = action_name,
+        .result = if (dispatch) |value| @tagName(value) else "released",
+        .hresult = hresult,
+        .state_revision = sound.state.revision,
+        .renderer_generation = context.renderer_generation,
+        .frame_duration_ms = context.last_frame_duration_ms,
+        .dpi = @intFromFloat(context.scale * 96),
+        .screen_origin_x_px = snapshot.screen_transform.window_left_px,
+        .screen_origin_y_px = snapshot.screen_transform.window_top_px,
+        .pixels_per_dip = snapshot.screen_transform.pixels_per_dip,
+        .bounds = bounds,
+        .hit_region = hit_region,
+        .surface_clip = .{ .left = snapshot.surface_clip.left, .top = snapshot.surface_clip.top, .right = snapshot.surface_clip.right, .bottom = snapshot.surface_clip.bottom },
+        .content_clip = .{ .left = snapshot.content_clip.left, .top = snapshot.content_clip.top, .right = snapshot.content_clip.right, .bottom = snapshot.content_clip.bottom },
+    });
+}
+
+fn traceSoundResult(context: *PaintContext, token: u64, operation: []const u8, disposition: []const u8, hresult: i32) void {
+    if (!context.trace_ui_enabled) return;
+    const sound_revision = if (context.sound_controller) |sound| sound.state.revision else 0;
+    Diagnostics.logUiTrace(true, .{
+        .operation_id = token,
+        .element = "sound",
+        .action = operation,
+        .result = disposition,
+        .hresult = hresult,
+        .state_revision = sound_revision,
+        .renderer_generation = context.renderer_generation,
+        .frame_duration_ms = context.last_frame_duration_ms,
+        .dpi = @intFromFloat(context.scale * 96),
+    });
+}
+
+fn dispatchInputAction(context: *PaintContext, action: InputRouter.Action) void {
+    switch (action) {
+        .adjust => |value| {
+            if (value.phase == .press) context.sound_page_state.setPressed(.{ .id = value.element_id, .index = value.element_index });
+            if (value.element_id == .slider) {
+                const dispatch = setMixerLevel(context, value.element_index, value.fraction);
+                traceInputAction(context, value.element_id, value.element_index, value.frame_generation, @tagName(value.phase), dispatch);
             }
         },
-        .spatial => logFormatted("sound page: spatial sound row {d} has no public read/write API", .{hit.index}),
-        .mixer_slider => setMixerLevel(context, hit.index, hit.fraction),
-        .mixer_gear, .footer => {
-            _ = StartMenu.openUri(uri_sound);
+        .release => |value| {
+            context.sound_page_state.setPressed(null);
+            traceInputAction(context, value.element_id, value.element_index, value.frame_generation, "release", null);
+        },
+        .none => {},
+    }
+}
+
+fn handleSoundPageClick(context: *PaintContext, local_x: f32, local_y: f32, point: IslandWindow.Point, slider_press_already_handled: bool) bool {
+    const card = systemPanelCardBox(context);
+    _ = local_x;
+    _ = local_y;
+    const model = soundPageViewModel(context) orelse return false;
+    const screen_point = SoundPage.Point{ .x_px = point.x, .y_px = point.y };
+    const action = SoundPage.actionAt(&model, card, &context.presented_sound_layout, screen_point);
+    switch (action) {
+        .back => {
             context.sound_page_open = false;
-            context.mixer_drag_row = -1;
+            _ = context.input_router.route(.cancel, &context.presented_sound_layout);
+        },
+        .select_default_device => |sound_action| _ = dispatchSoundAction(context, sound_action),
+        .set_volume => |sound_action| {
+            if (!slider_press_already_handled) {
+                _ = dispatchSoundAction(context, sound_action);
+                _ = context.input_router.route(.release, &context.presented_sound_layout);
+            }
+        },
+        .spatial => |index| logFormatted("sound page: spatial sound row {d} has no public read/write API", .{index}),
+        .open_settings => {
+            _ = ShellCommand.openUri(uri_sound);
+            context.sound_page_open = false;
+            _ = context.input_router.route(.cancel, &context.presented_sound_layout);
             _ = context.motion.setTarget(.collapsed);
         },
-        .scrollbar => {
-            const layout = CardLayout.soundPageFor(card, device_count, mix_count, context.sound_page_scroll);
-            if (local_y < layout.scroll_thumb.top) context.sound_page_scroll -= 140 else if (local_y > layout.scroll_thumb.bottom) context.sound_page_scroll += 140;
-            context.sound_page_scroll = std.math.clamp(context.sound_page_scroll, 0, CardLayout.soundPageScrollLimit(card, device_count, mix_count));
+        .scroll_by => |distance| {
+            context.sound_page_state.scroll = std.math.clamp(context.sound_page_state.scroll + distance, 0, SoundPage.scrollLimit(card, &model));
         },
         .none => return false,
     }
-    buildSoundPageText(context);
     if (context.window) |window| window.invalidate();
     return true;
 }
 
 fn trayPressWorker(request: TrayPress.Request, right_click: bool) void {
     const com_result = CoInitializeEx(null, 0);
-    const com_ok = com_result >= 0 or com_result == rpc_e_changed_mode;
-    if (!com_ok) {
+    if (com_result < 0) {
         Log.logLine("tray icon click: COM initialization failed");
         return;
     }
-    defer if (com_result >= 0) CoUninitialize();
+    defer CoUninitialize();
     const outcome = TrayPress.pressTrayIcon(&request, true, right_click);
     var line: [96]u8 = undefined;
     const message = std.fmt.bufPrint(&line, "tray icon click: {s}{s}", .{ @tagName(outcome.result), if (right_click) " (right click)" else "" }) catch "tray icon click finished";
@@ -1807,9 +1895,9 @@ fn wideBasename(path_arg: []const u16) []const u16 {
     return path[offset..];
 }
 
-fn sameImageName(a_arg: []const u16, b_arg: []const u16) bool {
-    const a = wideBasename(a_arg);
-    const b = wideBasename(b_arg);
+fn sameImagePath(a_arg: []const u16, b_arg: []const u16) bool {
+    const a = std.mem.sliceTo(a_arg, 0);
+    const b = std.mem.sliceTo(b_arg, 0);
     if (a.len == 0 or a.len != b.len) return false;
     for (a, b) |left, right| {
         const lower_left = if (left >= 'A' and left <= 'Z') left + ('a' - 'A') else left;
@@ -1819,59 +1907,97 @@ fn sameImageName(a_arg: []const u16, b_arg: []const u16) bool {
     return true;
 }
 
-fn processImagePath(process_id: DWORD) ?[260]u16 {
+fn processImagePath(process_id: DWORD) ?[512]u16 {
     const process = OpenProcess(process_query_limited_information, 0, process_id) orelse return null;
     defer _ = CloseHandle(process);
-    var path: [260]u16 = @splat(0);
+    var path: [512]u16 = @splat(0);
     var length: DWORD = @intCast(path.len);
     if (QueryFullProcessImageNameW(process, 0, &path, &length) == 0 or length == 0) return null;
     path[@min(length, @as(DWORD, @intCast(path.len - 1)))] = 0;
     return path;
 }
 
-fn windowForImage(context: *PaintContext, image: []const u16) HWND {
-    if (wideBasename(image).len == 0) return null;
+fn processCreatedAt(process_id: DWORD) ?u64 {
+    const process = OpenProcess(process_query_limited_information, 0, process_id) orelse return null;
+    defer _ = CloseHandle(process);
+    var created = FileTime{ .low = 0, .high = 0 };
+    var exited = FileTime{ .low = 0, .high = 0 };
+    var kernel = FileTime{ .low = 0, .high = 0 };
+    var user = FileTime{ .low = 0, .high = 0 };
+    if (GetProcessTimes(process, &created, &exited, &kernel, &user) == 0) return null;
+    return (@as(u64, created.high) << 32) | created.low;
+}
+
+fn windowInstanceForImage(context: *PaintContext, image: []const u16) ?TrayCatalog.WindowInstance {
+    if (std.mem.sliceTo(image, 0).len == 0) return null;
     for (context.task_windows.entries[0..context.task_windows.count]) |entry| {
         const path = processImagePath(entry.process_id) orelse continue;
-        if (sameImageName(&path, image)) return entry.handle;
+        if (!sameImagePath(&path, image)) continue;
+        const window = entry.handle orelse continue;
+        const created = processCreatedAt(entry.process_id) orelse continue;
+        return .{ .process_id = entry.process_id, .window_handle = @intFromPtr(window), .process_created_at = created };
     }
     return null;
 }
 
-fn trayMenuFactsFor(context: *PaintContext, cell: usize) CardLayout.TrayMenuFacts {
-    const icons = context.tray_icons orelse return .{};
-    if (cell >= icons.count()) return .{};
-    const path = icons.exePathAt(cell) orelse return .{};
-    const has_path = std.mem.sliceTo(path, 0).len != 0;
-    if (!has_path) return .{};
-    return .{ .has_exe_path = true, .has_window = windowForImage(context, path) != null };
+fn trayMenuFactsFor(context: *PaintContext, cell: usize) ?TrayCatalog.WindowInstance {
+    const icons = context.tray_icons orelse return null;
+    if (cell >= icons.count()) return null;
+    const path = icons.exePathAt(cell) orelse return null;
+    return windowInstanceForImage(context, path);
 }
 
-fn terminateProcessesOfImage(image: []const u16) usize {
-    if (wideBasename(image).len == 0) return 0;
-    const snapshot = CreateToolhelp32Snapshot(th32cs_snapprocess, 0) orelse return 0;
-    if (@intFromPtr(snapshot) == error_invalid_handle) return 0;
-    defer _ = CloseHandle(snapshot);
-    var entry = std.mem.zeroes(ProcessEntry32W);
-    entry.size = @sizeOf(ProcessEntry32W);
-    if (Process32FirstW(snapshot, &entry) == 0) return 0;
-    var ended: usize = 0;
-    while (true) {
-        if (sameImageName(&entry.exe_file, image)) {
-            if (OpenProcess(process_terminate, 0, entry.process_id)) |process| {
-                if (TerminateProcess(process, 0) != 0) ended += 1;
-                _ = CloseHandle(process);
-            }
-        }
-        if (Process32NextW(snapshot, &entry) == 0) break;
-    }
-    return ended;
+fn windowForIdentity(context: *PaintContext, identity: TrayCatalog.Identity) ?HWND {
+    const icon = trayIconForIdentity(context, identity) orelse return null;
+    const instance = identity.window_instance orelse return null;
+    if (instance.process_id == 0 or instance.window_handle == 0) return null;
+    const window: HWND = @ptrFromInt(instance.window_handle);
+    if (IsWindow(window) == 0) return null;
+    var current_pid: DWORD = 0;
+    _ = GetWindowThreadProcessId(window, &current_pid);
+    if (current_pid != instance.process_id or processCreatedAt(current_pid) != instance.process_created_at) return null;
+    const path = processImagePath(current_pid) orelse return null;
+    if (!sameImagePath(&path, &icon.exe_path)) return null;
+    return window;
+}
+
+fn terminateTrayProcess(context: *PaintContext, identity: TrayCatalog.Identity) bool {
+    const window = windowForIdentity(context, identity) orelse return false;
+    _ = window;
+    const instance = identity.window_instance orelse return false;
+    const process = OpenProcess(process_terminate | process_query_limited_information, 0, instance.process_id) orelse return false;
+    defer _ = CloseHandle(process);
+    var created = FileTime{ .low = 0, .high = 0 };
+    var exited = FileTime{ .low = 0, .high = 0 };
+    var kernel = FileTime{ .low = 0, .high = 0 };
+    var user = FileTime{ .low = 0, .high = 0 };
+    if (GetProcessTimes(process, &created, &exited, &kernel, &user) == 0) return false;
+    const created_at = (@as(u64, created.high) << 32) | created.low;
+    if (created_at != instance.process_created_at) return false;
+    return TerminateProcess(process, 0) != 0;
 }
 
 fn startTrayPress(context: *PaintContext, cell: usize, right_click: bool) void {
     const icons = context.tray_icons orelse return;
     const icon = icons.at(cell) orelse return;
-    const request = makeTrayPressRequest(icon, icons.exePathAt(cell));
+    const identity = TrayCatalog.identityFor(icon, icons.getRevision(), cell);
+    startTrayPressIdentity(context, identity, right_click);
+}
+
+fn trayIconForIdentity(context: *PaintContext, identity: TrayCatalog.Identity) ?*const TrayCatalog.Icon {
+    const icons = context.tray_icons orelse return null;
+    if (identity.revision != icons.getRevision() or identity.index >= icons.count()) return null;
+    const icon = icons.at(identity.index) orelse return null;
+    if (!TrayCatalog.identityMatches(identity, icon, icons.getRevision(), identity.index)) return null;
+    return icon;
+}
+
+fn startTrayPressIdentity(context: *PaintContext, identity: TrayCatalog.Identity, right_click: bool) void {
+    const icon = trayIconForIdentity(context, identity) orelse {
+        Log.logLine("tray icon click: stale registration identity was discarded");
+        return;
+    };
+    const request = makeTrayPressRequest(icon, &icon.exe_path);
     if (std.Thread.spawn(.{}, trayPressWorker, .{ request, right_click })) |thread| {
         thread.detach();
     } else |_| {
@@ -1880,50 +2006,90 @@ fn startTrayPress(context: *PaintContext, cell: usize, right_click: bool) void {
 }
 
 fn closeTrayMenu(context: *PaintContext) void {
-    context.tray_menu_open = false;
-    context.tray_menu_cell = -1;
-    context.tray_menu_action_count = 0;
-    context.tray_menu_hovered = -1;
-    context.tray_quit_armed = false;
+    TrayController.closeMenu(&context.tray_state);
 }
 
 fn dismissSystemPanel(context: *PaintContext) void {
     context.system_panel_pinned = false;
     context.sound_page_open = false;
     context.start_page_open = false;
-    context.tray_page_open = false;
+    TrayController.closePage(&context.tray_state);
     closeTrayMenu(context);
-    context.mixer_drag_row = -1;
-    context.mixer_drag_pid = 0;
-    _ = context.motion.setTarget(if (context.active_present) .music_strip else .collapsed);
+    _ = context.input_router.route(.cancel, &context.presented_sound_layout);
+    _ = context.motion.setTarget(if (context.music_state.active_present) .music_strip else .collapsed);
 }
 
 fn openTrayMenu(context: *PaintContext, cell: usize, card: Geometry.RoundedBox) bool {
     const icons = context.tray_icons orelse return false;
     if (cell >= icons.count()) return false;
-    const page = CardLayout.trayPageFor(card, @intCast(context.tray_page_icon_count));
+    const page = TrayPage.layoutFor(card, @intCast(context.tray_page_icon_count));
     if (cell >= @as(usize, @intCast(page.count))) return false;
-    context.tray_menu_cell = @intCast(cell);
-    context.tray_menu_action_count = CardLayout.trayMenuEntriesFor(trayMenuFactsFor(context, cell), &context.tray_menu_actions);
+    const icon = icons.at(cell) orelse return false;
+    var identity = TrayCatalog.identityFor(icon, icons.getRevision(), cell);
+    identity.window_instance = trayMenuFactsFor(context, cell);
+    if (!TrayController.openMenu(&context.tray_state, identity, icon, icons.getRevision(), identity.window_instance != null)) return false;
     const icon_cell = page.cells[cell];
-    context.tray_menu_layout = CardLayout.trayMenuFor(card, icon_cell.right, icon_cell.bottom, @intCast(context.tray_menu_action_count));
-    context.tray_menu_open = context.tray_menu_action_count != 0 and context.tray_menu_layout.count != 0;
-    context.tray_menu_hovered = -1;
-    context.tray_quit_armed = false;
-    return context.tray_menu_open;
+    const menu = TrayPage.menuFor(card, icon_cell.right, icon_cell.bottom, @intCast(context.tray_state.menu_count));
+    context.tray_card_text.view = TrayPage.buildView(card, context.tray_page_icon_count, icons.getRevision(), menu);
+    if (menu.count == 0) closeTrayMenu(context);
+    return context.tray_state.menu_open;
 }
 
-fn runTrayMenuAction(context: *PaintContext, action: CardLayout.TrayMenuAction) void {
-    const icons = context.tray_icons orelse return;
-    if (context.tray_menu_cell < 0 or @as(usize, @intCast(context.tray_menu_cell)) >= icons.count()) return;
-    const cell: usize = @intCast(context.tray_menu_cell);
-    const path = icons.exePathAt(cell) orelse &.{};
+fn handleTrayMenuClick(context: *PaintContext, local_x: f32, local_y: f32) void {
+    const hit = TrayPage.actionAt(&context.presented_tray_view, local_x, local_y);
+    const row: usize = if (hit) |action| switch (action) {
+        .menu_row => |index| index,
+        else => {
+            closeTrayMenu(context);
+            Log.logLine("tray menu: closed by a click outside its rows");
+            return;
+        },
+    } else {
+        closeTrayMenu(context);
+        Log.logLine("tray menu: closed by a click outside its rows");
+        return;
+    };
+    const selected = context.tray_state.selected orelse {
+        closeTrayMenu(context);
+        return;
+    };
+    const icon = trayIconForIdentity(context, selected) orelse {
+        closeTrayMenu(context);
+        return;
+    };
+    if (row >= context.tray_state.menu_count) {
+        closeTrayMenu(context);
+        return;
+    }
+    const menu_action = context.tray_state.menu_actions[row];
+    const was_quit_armed = context.tray_state.quit_armed;
+    if (TrayController.activateMenuRow(&context.tray_state, row, icon, context.tray_page_revision)) |effect| {
+        switch (effect) {
+            .press_icon => |identity| startTrayPressIdentity(context, identity, false),
+            .menu_action => |request| runTrayMenuAction(context, request.target, request.action),
+        }
+        closeTrayMenu(context);
+        if (menu_action == .open or menu_action == .close_window or menu_action == .application_menu) dismissSystemPanel(context);
+    } else if (!was_quit_armed and context.tray_state.quit_armed) {
+        Log.logLine("tray menu: quit armed; click the same row again to confirm");
+    } else {
+        closeTrayMenu(context);
+    }
+}
+
+fn runTrayMenuAction(context: *PaintContext, identity: TrayCatalog.Identity, action: TrayController.MenuAction) void {
+    const icon = trayIconForIdentity(context, identity) orelse {
+        Log.logLine("tray menu: stale registration identity was discarded");
+        closeTrayMenu(context);
+        return;
+    };
+    const path = std.mem.sliceTo(&icon.exe_path, 0);
     const image = wideBasename(path);
     switch (action) {
-        .open => startTrayPress(context, cell, false),
-        .application_menu => startTrayPress(context, cell, true),
+        .open => startTrayPressIdentity(context, identity, false),
+        .application_menu => startTrayPressIdentity(context, identity, true),
         .activate_window => {
-            const target = windowForImage(context, image);
+            const target = windowForIdentity(context, identity);
             const raised = if (target) |window| context.task_windows.activate(window) else false;
             logFormatted("tray menu: {s} -> {s}", .{ "activate window", if (raised) "brought forward" else "nothing to bring forward" });
         },
@@ -1940,36 +2106,35 @@ fn runTrayMenuAction(context: *PaintContext, action: CardLayout.TrayMenuAction) 
             logFormatted("tray menu: opened the location of {s}", .{"the tray application"});
         },
         .close_window => {
-            if (windowForImage(context, image) == null) return;
-            var closed: usize = 0;
-            for (context.task_windows.entries[0..context.task_windows.count]) |entry| {
-                const process_path = processImagePath(entry.process_id) orelse continue;
-                if (sameImageName(&process_path, image) and PostMessageW(entry.handle, wm_close, 0, 0) != 0) closed += 1;
-            }
-            logFormatted("tray menu: asked the application to close {d} window(s)", .{closed});
+            const target = windowForIdentity(context, identity) orelse return;
+            const closed = PostMessageW(target, wm_close, 0, 0) != 0;
+            Log.logLine(if (closed) "tray menu: asked the selected application window to close" else "tray menu: selected application window refused close");
         },
         .quit_application => {
-            const ended = terminateProcessesOfImage(image);
-            logFormatted("tray menu: ended {d} process(es)", .{ended});
+            const ended = terminateTrayProcess(context, identity);
+            Log.logLine(if (ended) "tray menu: ended the confirmed application process instance" else "tray menu: confirmed process instance is stale or could not be ended");
         },
     }
 }
 
 fn handleTrayPageClick(context: *PaintContext, local_x: f32, local_y: f32) bool {
-    const card = systemPanelCardBox(context);
-    const index = CardLayout.trayPageCellAt(card, @intCast(context.tray_page_icon_count), local_x, local_y);
-    if (index >= 0) {
-        startTrayPress(context, @intCast(index), false);
-        context.tray_page_open = false;
-        context.tray_menu_open = false;
-    } else if (local_y <= card.rect.top + 34 and local_x <= card.rect.left + 48) {
-        context.tray_page_open = false;
-        closeTrayMenu(context);
-    } else {
-        return false;
-    }
-    if (index >= 0) {
-        dismissSystemPanel(context);
+    const action = TrayPage.actionAt(&context.presented_tray_view, local_x, local_y) orelse return false;
+    switch (action) {
+        .icon => |index| {
+            const icons = context.tray_icons orelse return false;
+            if (index >= icons.count()) return false;
+            const icon = icons.at(index) orelse return false;
+            const identity = TrayCatalog.identityFor(icon, icons.getRevision(), index);
+            if (TrayController.pressIcon(&context.tray_state, identity, icon, icons.getRevision()) == null) return false;
+            startTrayPressIdentity(context, identity, false);
+            dismissSystemPanel(context);
+        },
+        .back => {
+            TrayController.closePage(&context.tray_state);
+            closeTrayMenu(context);
+        },
+        .menu_row => return false,
+        .outside => return false,
     }
     if (context.window) |window| window.invalidate();
     return true;
@@ -2015,59 +2180,48 @@ fn runPowerAction(row: i32) bool {
 }
 
 fn handleStartPageClick(context: *PaintContext, local_x: f32, local_y: f32) bool {
-    const apps = context.start_apps orelse return false;
-    const card = systemPanelCardBox(context);
-    const layout = CardLayout.startPageFor(card);
-    if (!layout.valid) return false;
-
-    if (CardLayout.startRectHasPoint(layout.power_button, local_x, local_y)) {
-        if (context.start_page_state == 1) {
-            context.start_page_state = 0;
-        } else {
-            context.start_page_state = if (context.start_page_state == 2) 0 else 2;
-        }
-        context.start_power_confirm_row = -1;
-    } else if (context.start_page_state == 0) {
-        const pin_index = CardLayout.startPinCellAt(layout, @intCast(apps.pinCount()), local_x, local_y);
-        if (pin_index >= 0) {
-            if (apps.pinAt(@intCast(pin_index))) |app| {
-                const launched = StartApps.launchStartApp(@ptrCast(&app.target));
-                logFormatted("start page: launched pinned app; result={d}", .{@intFromBool(launched)});
+    if (!context.start_page_open) return false;
+    const page_action = LauncherPage.actionAt(&context.presented_launcher_layout, local_x, local_y) orelse return false;
+    const service = context.start_apps orelse return false;
+    const action: LauncherController.Action = switch (page_action) {
+        .open_apps => .open_apps,
+        .toggle_power => .toggle_power,
+        .launch_pinned => |request| .{ .launch_pinned = .{
+            .index = request.index,
+            .frame_generation = request.frame_generation,
+        } },
+        .pin_app => |index| .{ .pin_app = index },
+        .power_row => |index| .{ .power_row = index },
+    };
+    const effect = LauncherController.reduce(&context.launcher_state, action, service.pins.items, service.list.items);
+    if (effect) |operation| switch (operation) {
+        .refresh_index => {
+            const count = service.refreshList();
+            if (count == 0) Log.logLine("launcher: AppsFolder enumeration returned no entries");
+        },
+        .launch_app => |request| {
+            const result = LauncherService.launchStartApp(@ptrCast(&request.app.target));
+            if (LauncherController.completeLaunch(&context.launcher_state, request.generation, result)) {
+                logFormatted("launcher: launch result={d}; ShellExecute code={d}", .{ @intFromBool(result.succeeded), result.shell_code });
+                if (result.succeeded) {
+                    context.start_page_open = false;
+                    _ = context.motion.setTarget(.collapsed);
+                }
             }
-            context.start_page_open = false;
-            _ = context.motion.setTarget(.collapsed);
-        } else if (CardLayout.startRectHasPoint(layout.grid, local_x, local_y)) {
-            context.start_page_state = 1;
-            context.start_picker_scroll_row = 0;
-            _ = apps.refreshList();
-        } else {
-            return false;
-        }
-    } else if (context.start_page_state == 1) {
-        const row = CardLayout.startPickerRowAt(card, context.start_picker_scroll_row, apps.listCount(), local_x, local_y);
-        if (row >= 0) {
-            if (apps.listAt(@intCast(row))) |app| {
-                const added = apps.pin(std.mem.sliceTo(&app.target, 0), std.mem.sliceTo(&app.name, 0));
-                logFormatted("start page: pin app; result={d}", .{@intFromBool(added)});
-                context.start_page_state = 0;
-                context.start_power_confirm_row = -1;
-            }
-        } else return false;
-    } else if (context.start_page_state == 2) {
-        const row = CardLayout.startPowerRowAt(card, local_x, local_y);
-        if (row < 0) return false;
-        if (row >= 2 and context.start_power_confirm_row != row) {
-            context.start_power_confirm_row = row;
-        } else {
+        },
+        .pin_app => |app| {
+            const added = service.pin(std.mem.sliceTo(&app.target, 0), std.mem.sliceTo(&app.name, 0));
+            logFormatted("launcher: pin result={d}", .{@intFromBool(added)});
+            if (added) context.launcher_state.page = .pins;
+        },
+        .run_power_action => |row| {
             const success = runPowerAction(row);
-            context.start_power_confirm_row = -1;
             if (success or row >= 2) {
                 context.start_page_open = false;
                 _ = context.motion.setTarget(.collapsed);
             }
-        }
-    } else return false;
-
+        },
+    };
     buildStartCardText(context);
     if (context.window) |window| window.invalidate();
     return true;
@@ -2079,12 +2233,42 @@ fn hasActiveNotification(context: *const PaintContext, now: u64) bool {
 
 fn activeNotification(context: *const PaintContext, now: u64) ?*const Notification.Notification {
     const store = context.notifications orelse return null;
-    return store.activeDisplayWithFallback(now, context.wechat.call_notification_id);
+    return store.activeDisplayWithFallback(now, callNotificationId(context));
+}
+
+fn callNotificationId(context: *const PaintContext) i64 {
+    const store = context.notifications orelse return 0;
+    return store.sourceNotificationId(.wechat_call, 1) orelse 0;
+}
+
+fn consumeNotificationEvents(context: *PaintContext, events: []const NotificationInput.Event, now: u64) usize {
+    const store = context.notifications orelse return 0;
+    var changed: usize = 0;
+    for (events) |event| switch (event) {
+        .message => |message| {
+            const result = store.ingest(message, now);
+            if (result.inserted) {
+                logFormatted("notification: [{s}] {s}", .{
+                    if (result.notification.app[0] != 0) std.mem.sliceTo(&result.notification.app, 0) else "?",
+                    if (result.notification.title[0] != 0) std.mem.sliceTo(&result.notification.title, 0) else std.mem.sliceTo(&result.notification.body, 0),
+                });
+                changed += 1;
+            }
+        },
+        .dismiss_source => {
+            if (store.apply(event, now)) changed += 1;
+        },
+    };
+    if (changed > 0) {
+        _ = context.motion.setTarget(.notice_strip);
+        if (context.window) |window| window.invalidate();
+    }
+    return changed;
 }
 
 fn musicCardActive(context: *const PaintContext) bool {
-    return context.active_present and !context.system_panel_pinned and
-        !context.sound_page_open and !context.start_page_open and !context.tray_page_open;
+    return context.music_state.active_present and !context.system_panel_pinned and
+        !context.sound_page_open and !context.start_page_open and !context.tray_state.page_open;
 }
 
 fn copyBytesZ(output: []u8, input: []const u8) void {
@@ -2120,42 +2304,42 @@ fn maskCircularIcon(pixels: []u8, width: i32, height: i32) void {
 }
 
 fn buildMusicCardText(context: *PaintContext) void {
-    const info = &context.music_snapshot;
+    const info = &context.music_state.media;
     const lyric_duration = if (context.lyrics_provider) |provider|
         if (provider.current()) |lyrics| lyrics.track_duration_ms else 0
     else
         0;
-    const duration = if (context.active_from_session and info.duration_ms > 0) info.duration_ms else lyric_duration;
-    const app_name = if (context.active_from_session and info.app_name[0] != 0)
+    const duration = if (context.music_state.active_from_session and info.duration_ms > 0) info.duration_ms else lyric_duration;
+    const app_name = if (context.music_state.active_from_session and info.app_name[0] != 0)
         std.mem.sliceTo(&info.app_name, 0)
-    else if (context.active_from_session)
+    else if (context.music_state.active_from_session)
         std.mem.sliceTo(&info.app, 0)
     else
         "Media";
-    const artwork = if (context.active_from_session and info.artwork_size > 0)
+    const artwork = if (context.music_state.active_from_session and info.artwork_size > 0)
         info.artwork[0..@min(info.artwork_size, info.artwork.len)]
     else
         &.{};
-    const app_icon = if (context.active_from_session and info.icon_size > 0)
+    const app_icon = if (context.music_state.active_from_session and info.icon_size > 0)
         info.icon[0..@min(info.icon_size, info.icon.len)]
     else
         &.{};
     const fraction: f32 = if (duration > 0)
-        @as(f32, @floatFromInt(@min(context.active_position_ms, duration))) / @as(f32, @floatFromInt(duration))
+        @as(f32, @floatFromInt(@min(context.music_state.active_position_ms, duration))) / @as(f32, @floatFromInt(duration))
     else
         0;
     context.music_card_text = .{
-        .title = std.mem.sliceTo(&context.active_title, 0),
-        .artist = std.mem.sliceTo(&context.active_artist, 0),
-        .album = if (context.active_from_session) std.mem.sliceTo(&info.album, 0) else &.{},
+        .title = std.mem.sliceTo(&context.music_state.active_title, 0),
+        .artist = std.mem.sliceTo(&context.music_state.active_artist, 0),
+        .album = if (context.music_state.active_from_session) std.mem.sliceTo(&info.album, 0) else &.{},
         .app = app_name,
-        .playing = context.active_playing,
-        .position_ms = context.active_position_ms,
+        .playing = context.music_state.active_playing,
+        .position_ms = context.music_state.active_position_ms,
         .duration_ms = duration,
         .progress_fraction = fraction,
         .artwork_png = artwork,
         .artwork_revision = info.artwork_revision,
-        .background_png = if (context.active_from_session and context.music_background_png_size > 0)
+        .background_png = if (context.music_state.active_from_session and context.music_background_png_size > 0)
             context.music_background_png[0..context.music_background_png_size]
         else
             &.{},
@@ -2188,28 +2372,23 @@ fn nativeHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callconv(.
         if (pointInBox(strip, local[0], local[1])) return true;
     }
     const outer_card_up = context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded;
-    if (outer_card_up) switch (context.card_owner) {
+    if (outer_card_up) switch (context.presentation.card_owner) {
         .notification => if (pointInBox(notificationCardBox(context), local[0], local[1])) return true,
         .system_panel => if (pointInBox(systemPanelCardBox(context), local[0], local[1])) return true,
         .music => if (pointInBox(context.motion.current(), local[0], local[1])) return true,
         .none => {},
     };
     if (notification_active) return false;
-    const task_count = taskButtonCount(context);
-    const task_island = TaskStripLayout.rowAnchorWithTray(
-        Motion.boxForState(.collapsed, context.motion.anchor),
-        if (context.tray_icons) |icons| icons.count() > 0 else false,
-    );
-    if (task_count > 0 and TaskStripLayout.taskRowContains(task_island, task_count, local[0], local[1], 0, 0)) return true;
+    if (taskbarRowContains(context.presented_taskbar_view, local[0], local[1])) return true;
     const resting_deck = Motion.boxForState(.collapsed, context.motion.anchor);
     const deck_island = if (hasActiveNotification(context, GetTickCount64()))
         Motion.boxForState(.notice_strip, context.motion.anchor)
     else
         Motion.rowAnchorBox(context.motion.current(), resting_deck);
-    if (TaskStripLayout.startButtonHit(deck_island, local[0], local[1]) or
-        TaskStripLayout.systemButtonHit(deck_island, local[0], local[1])) return true;
+    if (BarControlLayout.startButtonHit(deck_island, local[0], local[1]) or
+        BarControlLayout.systemButtonHit(deck_island, local[0], local[1])) return true;
     if (context.tray_icons) |icons| {
-        if (icons.count() > 0 and TaskStripLayout.trayButtonHit(deck_island, local[0], local[1])) return true;
+        if (icons.count() > 0 and BarControlLayout.trayButtonHit(deck_island, local[0], local[1])) return true;
     }
     const current = context.motion.current();
     const resting = Motion.boxForState(.collapsed, context.motion.anchor);
@@ -2220,7 +2399,7 @@ fn nativeWheelHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) callc
     const raw = raw_context orelse return false;
     const context: *PaintContext = @ptrCast(@alignCast(raw));
     if (context.motion.target() != .expanded or hasActiveNotification(context, GetTickCount64())) return false;
-    if (!context.sound_page_open and !(context.start_page_open and context.start_page_state == 1)) return false;
+    if (!context.sound_page_open and !(context.start_page_open and context.launcher_state.page == .apps)) return false;
     const local = pointToLocalDip(point, context);
     return pointInBox(systemPanelCardBox(context), local[0], local[1]);
 }
@@ -2237,57 +2416,29 @@ fn nativeCursorHitTest(point: IslandWindow.Point, raw_context: ?*anyopaque) call
     else
         Motion.rowAnchorBox(context.motion.current(), resting);
     const tray_visible = context.tray_icons != null and context.tray_icons.?.count() > 0;
-    if (TaskStripLayout.startButtonHit(deck, local[0], local[1]) or
-        TaskStripLayout.systemButtonHit(deck, local[0], local[1]) or
-        (tray_visible and TaskStripLayout.trayButtonHit(deck, local[0], local[1]))) return true;
+    if (BarControlLayout.startButtonHit(deck, local[0], local[1]) or
+        BarControlLayout.systemButtonHit(deck, local[0], local[1]) or
+        (tray_visible and BarControlLayout.trayButtonHit(deck, local[0], local[1]))) return true;
 
-    const task_count = taskButtonCount(context);
-    const task_island = TaskStripLayout.rowAnchorWithTray(deck, tray_visible);
-    if (task_count > 0 and TaskStripLayout.taskIconUnderPointer(task_island, task_count, local[0], local[1]) >= 0) return true;
+    if (TaskbarPage.actionAt(&context.presented_taskbar_view, local[0], local[1]) != null) return true;
 
     const outer_card_up = context.motion.target() == .expanded or context.motion.visibleFromState() == .expanded;
     if (!outer_card_up) return false;
-    const card = systemPanelCardBox(context);
-    switch (context.card_owner) {
+    switch (context.presentation.card_owner) {
         .none, .notification => return false,
-        .music => return CardLayout.musicControlAt(context.motion.current(), local[0], local[1]) != .none,
-        .system_panel => switch (context.panel_level) {
+        .music => return MusicPage.actionAt(&context.presented_music_layout, .{ .x_px = point.x, .y_px = point.y }) != null,
+        .system_panel => switch (context.presentation.panel_level) {
             .sound => {
-                const hit = CardLayout.soundPageHitFor(
-                    card,
-                    @intCast(context.sound_page_text.device_count),
-                    @intCast(context.sound_page_text.mix_count),
-                    context.sound_page_scroll,
-                    local[0],
-                    local[1],
-                );
-                return hit.target != .none;
+                return SoundPage.interactionAt(&context.presented_sound_layout, .{ .x_px = point.x, .y_px = point.y }) != null;
             },
             .tray => {
-                if (CardLayout.trayPageCellAt(card, @intCast(context.tray_page_icon_count), local[0], local[1]) >= 0) return true;
-                return context.tray_menu_open and CardLayout.trayMenuRowAt(context.tray_menu_layout, local[0], local[1]) >= 0;
+                return TrayPage.actionAt(&context.presented_tray_view, local[0], local[1]) != null;
             },
             .start => {
-                const layout = CardLayout.startPageFor(card);
-                if (CardLayout.startRectHasPoint(layout.power_button, local[0], local[1])) return true;
-                return switch (context.start_page_state) {
-                    0 => CardLayout.startPinCellAt(layout, @intCast(context.start_card_text.pin_count), local[0], local[1]) >= 0 or
-                        CardLayout.startRectHasPoint(layout.grid, local[0], local[1]),
-                    1 => CardLayout.startPickerRowAt(card, context.start_picker_scroll_row, @intCast(context.start_card_text.list_count), local[0], local[1]) >= 0,
-                    2 => CardLayout.startPowerRowAt(card, local[0], local[1]) >= 0,
-                    else => false,
-                };
+                return LauncherPage.actionAt(&context.presented_launcher_layout, local[0], local[1]) != null;
             },
             .tiles => {
-                const hit = CardLayout.systemPanelHitFor(
-                    card,
-                    @intCast(context.system_panel_text.tile_count),
-                    1 + @as(i32, @intFromBool(context.system_panel_text.has_brightness)),
-                    context.system_panel_text.page_index,
-                    context.system_panel_text.page_count,
-                    local[0],
-                    local[1],
-                );
+                const hit = SystemPage.hitFor(&context.system_panel_view, local[0], local[1]);
                 return hit.target != .none;
             },
         },
@@ -2312,19 +2463,19 @@ fn nativeHitTestPolicyCheck() bool {
     const centre = IslandWindow.Point{ .x = 960, .y = 24 };
     if (!nativeHitTest(centre, @ptrCast(&context))) return false;
     if (nativeHitTest(.{ .x = 300, .y = 100 }, @ptrCast(&context))) return false;
-    const start = TaskStripLayout.startButtonFor(pill);
+    const start = BarControlLayout.startButtonFor(pill);
     if (!nativeHitTest(.{
         .x = @intFromFloat((start.left + start.right) * 0.5),
         .y = @intFromFloat((start.top + start.bottom) * 0.5),
     }, @ptrCast(&context))) return false;
     if (!context.motion.setTarget(.expanded)) return false;
     _ = context.motion.tick(0.36);
-    context.card_owner = .system_panel;
+    context.presentation.card_owner = .system_panel;
     if (!nativeHitTest(.{ .x = 960, .y = 100 }, @ptrCast(&context))) return false;
     if (nativeHitTest(.{ .x = 300, .y = 100 }, @ptrCast(&context))) return false;
     const deck = Motion.rowAnchorBox(context.motion.current(), Motion.boxForState(.collapsed, context.motion.anchor));
-    const start_button = TaskStripLayout.startButtonFor(deck);
-    const system_button = TaskStripLayout.systemButtonFor(deck);
+    const start_button = BarControlLayout.startButtonFor(deck);
+    const system_button = BarControlLayout.systemButtonFor(deck);
     if (!nativeCursorHitTest(pointAtDipRectCenter(start_button), @ptrCast(&context)) or
         !nativeCursorHitTest(pointAtDipRectCenter(system_button), @ptrCast(&context)) or
         nativeCursorHitTest(.{ .x = @intFromFloat((start_button.right + system_button.left) * 0.5), .y = @intFromFloat((start_button.top + start_button.bottom) * 0.5) }, @ptrCast(&context)) or
@@ -2332,47 +2483,62 @@ fn nativeHitTestPolicyCheck() bool {
 
     context.task_windows.count = 3;
     const task_count = taskButtonCount(&context);
-    const task_island = TaskStripLayout.rowAnchorWithTray(deck, false);
-    const task_button = TaskStripLayout.taskIconButtonAtAmounts(task_island, 1, task_count, &context.task_hover_amount, 0, 0);
-    if (!nativeCursorHitTest(pointAtDipRectCenter(task_button), @ptrCast(&context)) or
-        nativeCursorHitTest(.{ .x = @intFromFloat(task_button.right + TaskStripLayout.task_icon_gap_dip * 0.5), .y = @intFromFloat((task_button.top + task_button.bottom) * 0.5) }, @ptrCast(&context))) return false;
+    const task_island = TaskbarLayout.rowAnchorWithTray(deck, false);
+    var task_test_buttons: [3]TextRenderer.TaskButton = @splat(.{});
+    for (&task_test_buttons, 0..) |*button, index| button.window_id = index + 1;
+    context.presented_taskbar_view = TaskbarPage.buildView(task_island, &task_test_buttons, 1, 1, 0, 0, null);
+    const task_button = context.presented_taskbar_view.buttons[1].bounds;
+    if (task_count == 0 or !nativeCursorHitTest(pointAtDipRectCenter(task_button), @ptrCast(&context)) or
+        nativeCursorHitTest(.{ .x = @intFromFloat(task_button.right + TaskbarLayout.task_icon_gap_dip * 0.5), .y = @intFromFloat((task_button.top + task_button.bottom) * 0.5) }, @ptrCast(&context))) return false;
 
-    context.active_present = true;
-    context.card_owner = .music;
-    const music_layout = CardLayout.musicCardFor(context.motion.current());
+    context.music_state.active_present = true;
+    context.presentation.card_owner = .music;
+    const music_layout = MusicPage.layoutFor(context.motion.current());
     if (!nativeCursorHitTest(pointAtDipRectCenter(music_layout.play_pause), @ptrCast(&context)) or
         !nativeCursorHitTest(pointAtDipRectCenter(music_layout.previous), @ptrCast(&context)) or
         !nativeCursorHitTest(pointAtDipRectCenter(music_layout.next), @ptrCast(&context)) or
         nativeCursorHitTest(pointAtDipRectCenter(music_layout.title), @ptrCast(&context))) return false;
-    context.active_present = false;
+    context.music_state.active_present = false;
 
     context.start_page_open = true;
-    context.card_owner = .system_panel;
-    context.panel_level = .start;
+    context.presentation.card_owner = .system_panel;
+    context.presentation.panel_level = .start;
     const start_card = systemPanelCardBox(&context);
-    const start_layout = CardLayout.startPageFor(start_card);
+    context.presented_launcher_layout = LauncherPage.buildView(start_card, context.launcher_state.page, 18, 0, 0, Geometry.height(start_card.rect), 1);
+    const start_layout = LauncherPage.layoutFor(start_card);
     if (!nativeCursorHitTest(pointAtDipRectCenter(start_layout.power_button), @ptrCast(&context)) or
         nativeCursorHitTest(.{ .x = @intFromFloat((start_card.rect.left + start_card.rect.right) * 0.5), .y = @intFromFloat(start_card.rect.top + 8) }, @ptrCast(&context))) return false;
     context.start_page_open = false;
 
+    var sound_controller = SoundController.Controller{};
+    context.sound_controller = &sound_controller;
     context.sound_page_open = true;
-    context.panel_level = .sound;
-    const sound_layout = CardLayout.soundPageFor(systemPanelCardBox(&context), 0, 0, 0);
+    context.presentation.panel_level = .sound;
+    const sound_card = systemPanelCardBox(&context);
+    const sound_model = soundPageViewModel(&context).?;
+    const sound_layout = SoundPage.layoutFor(sound_card, &sound_model, 0);
+    context.presented_sound_layout = SoundPage.buildLayoutSnapshot(sound_card, &sound_model, Geometry.height(sound_card.rect), 1, .{});
     if (!nativeCursorHitTest(pointAtDipRectCenter(sound_layout.back_button), @ptrCast(&context)) or
         nativeCursorHitTest(pointAtDipRectCenter(sound_layout.title), @ptrCast(&context))) return false;
     context.sound_page_open = false;
+    context.sound_controller = null;
 
-    context.tray_page_open = true;
-    context.panel_level = .tray;
+    TrayController.openPage(&context.tray_state, context.tray_page_revision);
+    context.presentation.panel_level = .tray;
     context.tray_page_icon_count = 1;
-    const tray_layout = CardLayout.trayPageFor(systemPanelCardBox(&context), 1);
+    const tray_card = systemPanelCardBox(&context);
+    context.presented_tray_view = TrayPage.buildView(tray_card, 1, context.tray_page_revision, .{});
+    const tray_layout = TrayPage.layoutFor(tray_card, 1);
     if (!nativeCursorHitTest(pointAtDipRectCenter(tray_layout.cells[0]), @ptrCast(&context))) return false;
-    context.tray_page_open = false;
+    TrayController.closePage(&context.tray_state);
 
     context.system_panel_pinned = true;
-    context.panel_level = .tiles;
-    context.system_panel_text.tile_count = 1;
-    const panel_layout = CardLayout.systemPanelFor(systemPanelCardBox(&context), 1, 1, false, 0, 1);
+    context.presentation.panel_level = .tiles;
+    context.system_panel_view.presentation.tile_count = 1;
+    context.system_panel_view.presentation.page_count = 1;
+    context.system_panel_view.presentation.has_brightness = false;
+    const panel_layout = SystemLayout.systemPanelFor(systemPanelCardBox(&context), 1, 1, false, 0, 1);
+    context.system_panel_view.presentation.layout = panel_layout;
     return nativeCursorHitTest(pointAtDipRectCenter(panel_layout.tiles[0]), @ptrCast(&context));
 }
 
@@ -2431,10 +2597,13 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         context.task_last_refresh_ms = now;
         const previous_count = context.task_windows.count;
         const previous_foreground = context.task_windows.foreground;
+        const previous_revision = context.task_windows.revision;
         var previous_handles: [WindowList.max_task_windows]?*anyopaque = @splat(null);
         for (context.task_windows.entries, 0..) |entry, index| previous_handles[index] = entry.handle;
         _ = context.task_windows.refresh();
-        task_refresh_changed = previous_count != context.task_windows.count or previous_foreground != context.task_windows.foreground;
+        context.task_windows.snapshot(&context.candidate_taskbar_snapshot);
+        _ = context.taskbar_state.updateSnapshot(context.candidate_taskbar_snapshot);
+        task_refresh_changed = previous_count != context.task_windows.count or previous_foreground != context.task_windows.foreground or previous_revision != context.task_windows.revision;
         if (!task_refresh_changed) {
             for (context.task_windows.entries, 0..) |entry, index| {
                 if (previous_handles[index] != entry.handle) {
@@ -2455,10 +2624,10 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             const tray_changed = previous_count != icons.count() or previous_revision != icons.getRevision();
             if (context.tray_page_revision != icons.getRevision()) {
                 buildTrayPageText(context);
-                if (context.tray_page_open) window.invalidate();
+                if (context.tray_state.page_open) window.invalidate();
             }
             if (tray_changed) {
-                if (context.tray_menu_open) closeTrayMenu(context);
+                if (context.tray_state.menu_open) closeTrayMenu(context);
                 window.invalidate();
             }
         }
@@ -2473,31 +2642,26 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
 
     if (context.notification_server) |server| {
         if (context.notifications) |store| {
-            var incoming = Notification.Notification{};
+            _ = store;
+            var incoming = NotificationInput.Message{};
             while (server.take(&incoming)) {
-                const stored = store.pushAt(incoming, now);
-                logFormatted("notification: [{s}] {s}", .{
-                    if (stored.app[0] != 0) std.mem.sliceTo(&stored.app, 0) else "?",
-                    if (stored.title[0] != 0) std.mem.sliceTo(&stored.title, 0) else std.mem.sliceTo(&stored.body, 0),
-                });
-                _ = context.motion.setTarget(.notice_strip);
-                window.invalidate();
+                _ = consumeNotificationEvents(context, &.{.{ .message = incoming }}, now);
             }
         }
     }
 
-    if (context.notifications) |store| {
+    if (context.notifications != null) {
         if (now -| context.wechat_last_poll_ms >= 500) {
             context.wechat_last_poll_ms = now;
-            if (context.wechat.poll(store, now) > 0) {
+            var events: [2]NotificationInput.Event = undefined;
+            const event_count = context.wechat.poll(&events, now);
+            if (consumeNotificationEvents(context, events[0..event_count], now) > 0) {
                 logFormatted("wechat: {d} window announcement(s) so far", .{context.wechat.announcementCount()});
-                _ = context.motion.setTarget(.notice_strip);
-                window.invalidate();
             }
         }
-        if (context.sound_output != null and now -| context.wechat_last_sound_poll_ms >= 200) {
+        if (context.sound_controller != null and now -| context.wechat_last_sound_poll_ms >= 200) {
             context.wechat_last_sound_poll_ms = now;
-            const snapshot = context.sound_snapshot;
+            const snapshot = context.sound_controller.?.state.output;
             var wechat_session_active = false;
             var wechat_session_count: i32 = 0;
             for (snapshot.sessions[0..@min(snapshot.session_count, snapshot.sessions.len)]) |session| {
@@ -2505,19 +2669,18 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                 wechat_session_count += 1;
                 wechat_session_active = wechat_session_active or session.active;
             }
-            if (context.wechat.pollSound(
-                store,
+            var events: [1]NotificationInput.Event = undefined;
+            const event_count = context.wechat.pollSound(
+                &events,
                 WeChatWatch.anyWeChatProcessRunning(),
                 wechat_session_active,
                 wechat_session_count,
                 now,
-            ) > 0) {
-                _ = context.motion.setTarget(.notice_strip);
-                window.invalidate();
-            }
+            );
+            _ = consumeNotificationEvents(context, events[0..event_count], now);
         }
     }
-    if (context.wechat.call_notification_id != 0 and now -| context.call_meter_redraw_ms >= 50) {
+    if (callNotificationId(context) != 0 and now -| context.call_meter_redraw_ms >= 50) {
         context.call_meter_redraw_ms = now;
         window.invalidate();
     }
@@ -2527,7 +2690,7 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         if (music_revision != context.last_music_revision) {
             context.last_music_revision = music_revision;
             context.last_music_reading_ms = now;
-            music.snapshot(&context.music_snapshot);
+            music.snapshot(&context.music_state.media);
             window.invalidate();
         }
     }
@@ -2540,64 +2703,36 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         }
     }
 
-    const session_up = context.music_snapshot.present and context.music_snapshot.title[0] != 0;
-    const player_up = !session_up and context.player_snapshot.present and context.player_snapshot.title[0] != 0;
-    const title = if (session_up)
-        std.mem.sliceTo(&context.music_snapshot.title, 0)
-    else if (player_up)
-        std.mem.sliceTo(&context.player_snapshot.title, 0)
-    else
-        &.{};
-    const artist = if (session_up)
-        std.mem.sliceTo(&context.music_snapshot.artist, 0)
-    else if (player_up)
-        std.mem.sliceTo(&context.player_snapshot.artist, 0)
-    else
-        &.{};
-
-    context.active_present = session_up or player_up;
-    context.active_from_session = session_up;
-    context.active_playing = if (session_up) context.music_snapshot.state == .playing else player_up;
-    if (context.active_present) {
-        copyBytesZ(&context.active_title, title);
-        copyBytesZ(&context.active_artist, artist);
-        if (!std.mem.eql(u8, title, std.mem.sliceTo(&context.requested_title, 0)) or
-            !std.mem.eql(u8, artist, std.mem.sliceTo(&context.requested_artist, 0)))
-        {
-            copyBytesZ(&context.requested_title, title);
-            copyBytesZ(&context.requested_artist, artist);
-            context.track_stopwatch_ms = 0;
-            context.shown_lyric_text = @splat(0);
-            context.replaced_lyric_text = @splat(0);
-            context.lyric_line_age_seconds = 1;
-            context.lyric_scroll_dip = 0;
-            context.replaced_lyric_scroll_dip = 0;
-            context.music_wave_accent = .{};
-            context.last_wave_artwork_revision = std.math.maxInt(u64);
-            if (context.lyrics_provider) |lyrics| lyrics.request(title, artist);
+    const fallback_up = context.player_snapshot.present and context.player_snapshot.title[0] != 0;
+    const fallback = if (fallback_up) MusicController.FallbackPlayer{
+        .present = true,
+        .title = std.mem.sliceTo(&context.player_snapshot.title, 0),
+        .artist = std.mem.sliceTo(&context.player_snapshot.artist, 0),
+    } else MusicController.FallbackPlayer{};
+    const since_media_reading = now -| context.last_music_reading_ms;
+    const track_changed = context.music_state.update(
+        context.music_state.media,
+        fallback,
+        @intCast(@min(elapsed_ms, std.math.maxInt(i64))),
+        @intCast(@min(since_media_reading, std.math.maxInt(i64))),
+    );
+    if (track_changed) {
+        context.shown_lyric_text = @splat(0);
+        context.replaced_lyric_text = @splat(0);
+        context.lyric_line_age_seconds = 1;
+        context.lyric_scroll_dip = 0;
+        context.replaced_lyric_scroll_dip = 0;
+        context.music_wave_accent = .{};
+        context.last_wave_artwork_revision = std.math.maxInt(u64);
+        if (context.lyrics_provider) |lyrics| {
+            lyrics.request(
+                std.mem.sliceTo(&context.music_state.active_title, 0),
+                std.mem.sliceTo(&context.music_state.active_artist, 0),
+                context.music_state.track_generation,
+            );
         }
-        if (context.active_playing) {
-            context.track_stopwatch_ms = std.math.add(i64, context.track_stopwatch_ms, @intCast(elapsed_ms)) catch std.math.maxInt(i64);
-        }
-        if (session_up) {
-            const elapsed = now -| context.last_music_reading_ms;
-            context.active_position_ms = MusicSession.trackPositionFor(
-                context.music_snapshot.position_ms,
-                context.music_snapshot.duration_ms,
-                @intCast(@min(elapsed, std.math.maxInt(i64))),
-                context.track_stopwatch_ms,
-                context.active_playing,
-            ).ms;
-        } else {
-            context.active_position_ms = @max(0, context.track_stopwatch_ms);
-        }
-    } else {
-        context.active_title = @splat(0);
-        context.active_artist = @splat(0);
-        context.requested_title = @splat(0);
-        context.requested_artist = @splat(0);
-        context.track_stopwatch_ms = 0;
-        context.active_position_ms = 0;
+    }
+    if (!context.music_state.active_present) {
         context.current_lyric_line = .{};
         context.shown_lyric_text = @splat(0);
         context.replaced_lyric_text = @splat(0);
@@ -2607,32 +2742,19 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         context.music_wave_accent = .{};
         context.last_wave_artwork_revision = std.math.maxInt(u64);
     }
-    if (context.active_from_session and context.music_snapshot.artwork_size > 0 and
-        context.music_snapshot.artwork_revision != context.last_wave_artwork_revision)
+    if (context.music_state.active_from_session and context.music_state.media.artwork_size > 0 and
+        context.music_state.media.artwork_revision != context.last_wave_artwork_revision)
     {
-        context.last_wave_artwork_revision = context.music_snapshot.artwork_revision;
-        var decoded = WicImage.DecodedImage{};
-        const png = context.music_snapshot.artwork[0..@min(context.music_snapshot.artwork_size, context.music_snapshot.artwork.len)];
-        if (WicImage.decodeImage(png, &decoded, .artwork) and decoded.pixels != null and decoded.width > 0 and decoded.height > 0) {
-            const pixel_count = std.math.mul(usize, @intCast(decoded.width), @intCast(decoded.height)) catch 0;
-            const byte_count = std.math.mul(usize, pixel_count, 4) catch 0;
-            if (byte_count > 0) context.music_wave_accent = WicImage.accentColourFromArtwork(decoded.pixels.?[0..byte_count], decoded.width, decoded.height) else context.music_wave_accent = .{};
-        } else {
-            context.music_wave_accent = .{};
-        }
-        // Build the full-card wash once for each cover revision. The encoded
-        // image remains in PaintContext while TextRenderer uploads and caches it.
-        context.music_background_png_size = WicImage.makeBlurredBackgroundPng(
-            png,
-            105,
-            59,
-            &context.music_background_png,
-        );
+        context.last_wave_artwork_revision = context.music_state.media.artwork_revision;
+        const png = context.music_state.media.artwork[0..@min(context.music_state.media.artwork_size, context.music_state.media.artwork.len)];
+        const prepared = MediaService.prepareArtwork(png, &context.music_background_png);
+        context.music_wave_accent = prepared.accent;
+        context.music_background_png_size = prepared.background_size;
         context.music_background_revision = if (context.music_background_png_size > 0)
-            context.music_snapshot.artwork_revision
+            context.music_state.media.artwork_revision
         else
             0;
-    } else if ((!context.active_from_session or context.music_snapshot.artwork_size == 0) and context.last_wave_artwork_revision != std.math.maxInt(u64)) {
+    } else if ((!context.music_state.active_from_session or context.music_state.media.artwork_size == 0) and context.last_wave_artwork_revision != std.math.maxInt(u64)) {
         context.music_wave_accent = .{};
         context.last_wave_artwork_revision = 0;
         context.music_background_png_size = 0;
@@ -2642,20 +2764,21 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         const lyrics_revision = lyrics.getRevision();
         if (lyrics_revision != context.last_lyrics_revision) {
             context.last_lyrics_revision = lyrics_revision;
+            var lyrics_snapshot = Lyrics.Lyrics{};
+            var result_generation: u64 = 0;
+            if (lyrics.snapshot(&lyrics_snapshot, &result_generation)) {
+                _ = context.music_state.acceptLyrics(lyrics_snapshot, result_generation);
+            }
             window.invalidate();
         }
     }
     var lyric_line_changed = false;
     var lyric_scroll_animating = false;
-    if (context.active_present) {
+    if (context.music_state.active_present) {
         context.lyric_line_age_seconds = @min(1, context.lyric_line_age_seconds + dt);
         context.current_lyric_line = .{};
         var next_line: []const u8 = &.{};
-        if (context.lyrics_provider) |lyrics| {
-            if (lyrics.copyLineAt(context.active_position_ms, &context.current_lyric_line)) {
-                next_line = std.mem.sliceTo(&context.current_lyric_line.text, 0);
-            }
-        }
+        if (context.music_state.lyricAt(context.music_state.active_position_ms, &context.current_lyric_line)) next_line = std.mem.sliceTo(&context.current_lyric_line.text, 0);
         const shown_line = std.mem.sliceTo(&context.shown_lyric_text, 0);
         if (Lyrics.lyricLineChanged(next_line, shown_line)) {
             copyBytesZ(&context.replaced_lyric_text, shown_line);
@@ -2665,59 +2788,62 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             copyBytesZ(&context.shown_lyric_text, next_line);
             lyric_line_changed = true;
         }
-        const line_to_measure = if (next_line.len != 0) next_line else std.mem.sliceTo(&context.active_title, 0);
+        const line_to_measure = if (next_line.len != 0) next_line else std.mem.sliceTo(&context.music_state.active_title, 0);
         const line_box = Motion.boxForState(.music_strip, context.motion.anchor);
-        if (context.active_playing and activeNotification(context, now) == null and
-            context.text_renderer.trackLineNeedsScroll(line_to_measure, Geometry.width(line_box.rect)))
+        if (context.music_state.active_playing and activeNotification(context, now) == null and
+            context.text_renderer.scrollingLineNeedsScroll(line_to_measure, Geometry.width(line_box.rect)))
         {
             context.lyric_scroll_dip += dt * 26;
             lyric_scroll_animating = true;
         }
     }
-    const weather_revision = weather_reader.getRevision();
-    if (weather_revision != context.last_weather_revision) {
-        context.last_weather_revision = weather_revision;
-        window.invalidate();
+    if (context.weather_reader) |weather_reader| {
+        if (weather_reader.getSnapshot()) |source_snapshot| {
+            if (WeatherController.apply(&context.weather_state, source_snapshot)) {
+                context.last_weather_revision = source_snapshot.revision;
+                window.invalidate();
+            }
+        }
     }
-    if (context.active_playing) {
+    if (context.music_state.active_playing) {
         context.music_wave_phase += @as(f32, @floatFromInt(@min(elapsed_ms, 100))) / 1000 * 1.15;
         if (context.music_wave_phase > 6.2831853 * 64) context.music_wave_phase -= 6.2831853 * 64;
     }
-    if (context.active_playing and activeNotification(context, now) == null and now -| context.music_meter_redraw_ms >= 33) {
+    if (context.music_state.active_playing and activeNotification(context, now) == null and now -| context.music_meter_redraw_ms >= 33) {
         context.music_meter_redraw_ms = now;
         window.invalidate();
     }
-    if (context.wechat.call_notification_id == 0) {
-        const is_music_line = context.active_present and context.active_title[0] != 0;
+    if (callNotificationId(context) == 0) {
+        const is_music_line = context.music_state.active_present and context.music_state.active_title[0] != 0;
         const has_notice_line = activeNotification(context, now) != null;
         const placement = StatePolicy.statusPlacementFor(is_music_line or has_notice_line);
         const old_opacity = context.status_strip_opacity;
-        context.status_strip_opacity = TaskStripLayout.statusStripFadeStep(context.status_strip_opacity, placement.beside_deck, dt);
+        context.status_strip_opacity = BarControlLayout.statusStripFadeStep(context.status_strip_opacity, placement.beside_deck, dt);
         context.status_strip_animating = context.status_strip_opacity > 0.001 and context.status_strip_opacity < 0.999;
         if (@abs(context.status_strip_opacity - old_opacity) > 0.001) window.invalidate();
     } else {
         const old_opacity = context.status_strip_opacity;
-        context.status_strip_opacity = TaskStripLayout.statusStripFadeStep(context.status_strip_opacity, true, dt);
+        context.status_strip_opacity = BarControlLayout.statusStripFadeStep(context.status_strip_opacity, true, dt);
         context.status_strip_animating = context.status_strip_opacity > 0.001 and context.status_strip_opacity < 0.999;
         if (@abs(context.status_strip_opacity - old_opacity) > 0.001) window.invalidate();
     }
     if (context.fullscreen_app) {
         _ = context.motion.setTarget(if (hasActiveNotification(context, now)) .notice_strip else .full_bar);
     } else if (context.motion.target() == .full_bar) {
-        _ = context.motion.setTarget(if (context.active_present) .music_strip else .collapsed);
+        _ = context.motion.setTarget(if (context.music_state.active_present) .music_strip else .collapsed);
     }
     buildMusicCardText(context);
     if (!hasActiveNotification(context, now) and !context.system_panel_pinned and
-        !context.sound_page_open and !context.start_page_open and !context.tray_page_open)
+        !context.sound_page_open and !context.start_page_open and !context.tray_state.page_open)
     {
-        if (context.active_present and context.motion.target() == .collapsed) {
+        if (context.music_state.active_present and context.motion.target() == .collapsed) {
             _ = context.motion.setTarget(.music_strip);
-        } else if (!context.active_present and context.motion.target() == .music_strip) {
+        } else if (!context.music_state.active_present and context.motion.target() == .music_strip) {
             _ = context.motion.setTarget(.collapsed);
         }
     }
-    const music_second = @divTrunc(context.active_position_ms, 1000);
-    if (context.motion.target() == .expanded and context.active_present and music_second != context.last_music_card_second) {
+    const music_second = @divTrunc(context.music_state.active_position_ms, 1000);
+    if (context.motion.target() == .expanded and context.music_state.active_present and music_second != context.last_music_card_second) {
         context.last_music_card_second = music_second;
         window.invalidate();
     }
@@ -2729,9 +2855,12 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         const local_right = pointToLocalDip(right_click_point, context);
         const notification_active = hasActiveNotification(context, now);
         const card = systemPanelCardBox(context);
-        if (!notification_active and context.start_page_open and context.motion.target() == .expanded and context.start_page_state == 0) {
-            const layout = CardLayout.startPageFor(card);
-            const pin = CardLayout.startPinCellAt(layout, @intCast(context.start_card_text.pin_count), local_right[0], local_right[1]);
+        if (!notification_active and context.start_page_open and context.motion.target() == .expanded and context.launcher_state.page == .pins) {
+            const hit = LauncherPage.actionAt(&context.presented_launcher_layout, local_right[0], local_right[1]);
+            const pin: i32 = if (hit) |action| switch (action) {
+                .launch_pinned => |request| @intCast(request.index),
+                else => -1,
+            } else -1;
             if (pin >= 0) {
                 if (context.start_apps) |apps| {
                     const pin_index: usize = @intCast(pin);
@@ -2740,63 +2869,47 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                         logFormatted("start: unpinning '{s}'", .{CommandLine.wideTextToUtf8(&app.name, &name_utf8)});
                     }
                     if (apps.unpin(pin_index)) {
-                        context.start_power_confirm_row = -1;
+                        context.launcher_state.power_confirm_row = -1;
                         buildStartCardText(context);
                         window.invalidate();
                     }
                 }
             }
-        } else if (!notification_active and context.tray_page_open and context.motion.target() == .expanded and pointInBox(card, local_right[0], local_right[1])) {
-            const cell = CardLayout.trayPageCellAt(card, @intCast(context.tray_page_icon_count), local_right[0], local_right[1]);
-            if (cell >= 0 and openTrayMenu(context, @intCast(cell), card)) {
-                logFormatted("tray menu: opened for cell {d} ({d} entries)", .{ cell, context.tray_menu_action_count });
+        } else if (!notification_active and context.tray_state.page_open and context.motion.target() == .expanded and pointInBox(card, local_right[0], local_right[1])) {
+            const action = TrayPage.actionAt(&context.presented_tray_view, local_right[0], local_right[1]);
+            const cell: ?usize = if (action) |hit| switch (hit) {
+                .icon => |index| index,
+                else => null,
+            } else null;
+            if (cell) |index| if (openTrayMenu(context, index, card)) {
+                logFormatted("tray menu: opened for cell {d} ({d} entries)", .{ index, context.tray_state.menu_count });
                 window.invalidate();
-            }
+            };
         }
     }
     var pressed_point: IslandWindow.Point = undefined;
     if (window.takePress(&pressed_point)) {
         context.pending_press_point = pressed_point;
+        context.pending_press_action_handled = false;
         if (context.sound_page_open and context.motion.target() == .expanded and !hasActiveNotification(context, now)) {
-            const pressed_local = pointToLocalDip(pressed_point, context);
-            if (pointInBox(systemPanelCardBox(context), pressed_local[0], pressed_local[1])) {
-                const hit = CardLayout.soundPageHitFor(
-                    systemPanelCardBox(context),
-                    @intCast(context.sound_page_text.device_count),
-                    @intCast(context.sound_page_text.mix_count),
-                    context.sound_page_scroll,
-                    pressed_local[0],
-                    pressed_local[1],
-                );
-                if (hit.target == .mixer_slider) setMixerLevel(context, hit.index, hit.fraction);
-            }
+            const action = context.input_router.route(.{ .press = .{ .x_px = pressed_point.x, .y_px = pressed_point.y } }, &context.presented_sound_layout);
+            context.pending_press_action_handled = if (std.meta.activeTag(action) == .adjust) action.adjust.phase == .press else false;
+            dispatchInputAction(context, action);
         }
     }
     if (have_pointer) {
         const local = pointToLocalDip(pointer, context);
         const task_count = taskButtonCount(context);
-        const task_island = TaskStripLayout.rowAnchorWithTray(
-            Motion.boxForState(.collapsed, context.motion.anchor),
-            if (context.tray_icons) |icons| icons.count() > 0 else false,
-        );
         const next_task_hovered = if (task_count > 0)
-            TaskStripLayout.taskIconToKeepOpen(task_island, task_count, context.task_hovered_index, local[0], local[1])
+            TaskbarPage.hoverTarget(&context.presented_taskbar_view, context.taskbar_state.hovered_id, local[0], local[1])
         else
-            -1;
-        var task_animation_changed = next_task_hovered != context.task_hovered_index;
-        if (task_animation_changed) context.task_hovered_index = next_task_hovered;
-        for (0..task_count) |index| {
-            if (TaskStripLayout.controlWashStep(
-                &context.task_hover_amount[index],
-                &context.task_hover_velocity[index],
-                if (@as(i32, @intCast(index)) == context.task_hovered_index) 1 else 0,
-                dt,
-            )) task_animation_changed = true;
-        }
+            null;
+        var task_animation_changed = context.taskbar_state.setHover(next_task_hovered);
+        task_animation_changed = context.taskbar_state.stepHover(dt) or task_animation_changed;
         if (task_animation_changed) window.invalidate();
-        updateTaskThumbnailPreview(context, task_island, task_count, now);
-        const on_task_row = task_count > 0 and TaskStripLayout.taskRowContains(task_island, task_count, local[0], local[1], 0, 0);
-        const resting_state: Motion.IslandState = if (context.active_present) .music_strip else .collapsed;
+        updateTaskThumbnailPreview(context, now);
+        const on_task_row = taskbarRowContains(context.presented_taskbar_view, local[0], local[1]);
+        const resting_state: Motion.IslandState = if (context.music_state.active_present) .music_strip else .collapsed;
         const resting = Motion.boxForState(resting_state, context.motion.anchor);
         const notification_active = hasActiveNotification(context, now);
         const interactive_pill = if (notification_active) Motion.boxForState(.notice_strip, context.motion.anchor) else resting;
@@ -2805,43 +2918,34 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
             Motion.boxForState(.notice_strip, context.motion.anchor)
         else
             Motion.rowAnchorBox(context.motion.current(), resting_deck);
-        const on_start_button = TaskStripLayout.startButtonHit(deck_island, local[0], local[1]);
-        const on_system_button = TaskStripLayout.systemButtonHit(deck_island, local[0], local[1]);
+        const on_start_button = BarControlLayout.startButtonHit(deck_island, local[0], local[1]);
+        const on_system_button = BarControlLayout.systemButtonHit(deck_island, local[0], local[1]);
         const tray_button_visible = if (context.tray_icons) |icons| icons.count() > 0 else false;
-        const on_tray_button = tray_button_visible and TaskStripLayout.trayButtonHit(deck_island, local[0], local[1]);
+        const on_tray_button = tray_button_visible and BarControlLayout.trayButtonHit(deck_island, local[0], local[1]);
         const on_control = on_start_button or on_system_button or on_tray_button;
         var button_wash_changed = false;
-        button_wash_changed = TaskStripLayout.controlWashStep(&context.start_button_wash, &context.start_button_velocity, if (context.forced_start_hover or on_start_button) 1 else 0, dt) or button_wash_changed;
-        button_wash_changed = TaskStripLayout.controlWashStep(&context.system_button_wash, &context.system_button_velocity, if (on_system_button) 1 else 0, dt) or button_wash_changed;
-        button_wash_changed = TaskStripLayout.controlWashStep(&context.tray_button_wash, &context.tray_button_velocity, if (on_tray_button) 1 else 0, dt) or button_wash_changed;
+        button_wash_changed = BarControlLayout.controlWashStep(&context.start_button_wash, &context.start_button_velocity, if (context.forced_start_hover or on_start_button) 1 else 0, dt) or button_wash_changed;
+        button_wash_changed = BarControlLayout.controlWashStep(&context.system_button_wash, &context.system_button_velocity, if (on_system_button) 1 else 0, dt) or button_wash_changed;
+        button_wash_changed = BarControlLayout.controlWashStep(&context.tray_button_wash, &context.tray_button_velocity, if (on_tray_button) 1 else 0, dt) or button_wash_changed;
         const on_pill = pointInBox(interactive_pill, local[0], local[1]) or on_control;
         if (button_wash_changed) window.invalidate();
         hover_animation_active = task_animation_changed or button_wash_changed;
         if (window.takeClick()) {
             const press = context.pending_press_point orelse pointer;
+            const released_action = context.input_router.route(.release, &context.presented_sound_layout);
+            dispatchInputAction(context, released_action);
+            const slider_press_already_handled = context.pending_press_action_handled or std.meta.activeTag(released_action) == .release;
             context.pending_press_point = null;
+            context.pending_press_action_handled = false;
             const pressed_local = pointToLocalDip(press, context);
-            if (context.tray_menu_open) {
-                const row = CardLayout.trayMenuRowAt(context.tray_menu_layout, pressed_local[0], pressed_local[1]);
-                if (row >= 0 and @as(usize, @intCast(row)) < context.tray_menu_action_count) {
-                    const action = context.tray_menu_actions[@intCast(row)];
-                    if (action == .quit_application and !context.tray_quit_armed) {
-                        context.tray_quit_armed = true;
-                        Log.logLine("tray menu: quit armed; click the same row again to confirm");
-                    } else {
-                        runTrayMenuAction(context, action);
-                        closeTrayMenu(context);
-                        if (action == .open or action == .close_window or action == .application_menu) dismissSystemPanel(context);
-                    }
-                } else {
-                    closeTrayMenu(context);
-                    Log.logLine("tray menu: closed by a click outside its rows");
-                }
+            if (context.tray_state.menu_open) {
+                handleTrayMenuClick(context, pressed_local[0], pressed_local[1]);
                 window.invalidate();
             } else if (hasActiveNotification(context, now)) {
                 if (context.notifications) |store| {
-                    const keep_call: ?i64 = if (context.wechat.call_notification_id != 0)
-                        context.wechat.call_notification_id
+                    const call_id = callNotificationId(context);
+                    const keep_call: ?i64 = if (call_id != 0)
+                        call_id
                     else
                         null;
                     const marked = store.markAllReadExcept(keep_call);
@@ -2857,16 +2961,16 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                     Motion.boxForState(.notice_strip, context.motion.anchor)
                 else
                     Motion.rowAnchorBox(context.motion.current(), resting_deck);
-                const press_on_start = TaskStripLayout.startButtonHit(press_deck, pressed_local[0], pressed_local[1]);
-                const press_on_system = TaskStripLayout.systemButtonHit(press_deck, pressed_local[0], pressed_local[1]);
-                const press_on_tray = tray_button_visible and TaskStripLayout.trayButtonHit(press_deck, pressed_local[0], pressed_local[1]);
+                const press_on_start = BarControlLayout.startButtonHit(press_deck, pressed_local[0], pressed_local[1]);
+                const press_on_system = BarControlLayout.systemButtonHit(press_deck, pressed_local[0], pressed_local[1]);
+                const press_on_tray = tray_button_visible and BarControlLayout.trayButtonHit(press_deck, pressed_local[0], pressed_local[1]);
                 if (!notification_active_now and press_on_system) {
-                    const close = context.system_panel_pinned and !context.start_page_open and !context.tray_page_open and !context.sound_page_open;
+                    const close = context.system_panel_pinned and !context.start_page_open and !context.tray_state.page_open and !context.sound_page_open;
                     closeTrayMenu(context);
                     context.system_panel_pinned = !close;
                     if (!close) context.card_hang = .system_button;
                     context.start_page_open = false;
-                    context.tray_page_open = false;
+                    TrayController.closePage(&context.tray_state);
                     context.sound_page_open = false;
                     if (close) _ = context.motion.setTarget(resting_state) else _ = context.motion.setTarget(.expanded);
                     window.invalidate();
@@ -2874,24 +2978,24 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                     const close = context.start_page_open;
                     closeTrayMenu(context);
                     context.start_page_open = !close;
-                    context.tray_page_open = false;
+                    TrayController.closePage(&context.tray_state);
                     context.sound_page_open = false;
                     context.system_panel_pinned = !close;
                     if (!close) context.card_hang = .start_button;
                     if (close) {
                         _ = context.motion.setTarget(resting_state);
                     } else {
-                        context.start_page_state = 0;
-                        context.start_power_confirm_row = -1;
+                        context.launcher_state.page = .pins;
+                        context.launcher_state.power_confirm_row = -1;
                         if (context.start_apps) |apps| _ = apps.refreshList();
                         buildStartCardText(context);
                         _ = context.motion.setTarget(.expanded);
                     }
                     window.invalidate();
                 } else if (!notification_active_now and press_on_tray) {
-                    const close = context.tray_page_open;
+                    const close = context.tray_state.page_open;
                     closeTrayMenu(context);
-                    context.tray_page_open = !close;
+                    if (close) TrayController.closePage(&context.tray_state) else TrayController.openPage(&context.tray_state, context.tray_page_revision);
                     context.start_page_open = false;
                     context.sound_page_open = false;
                     context.system_panel_pinned = !close;
@@ -2907,17 +3011,16 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                         _ = context.motion.setTarget(.expanded);
                     }
                     window.invalidate();
-                } else if (!notification_active_now and context.motion.target() == .expanded and musicCardActive(context) and pointInBox(context.motion.current(), pressed_local[0], pressed_local[1])) {
-                    const control = CardLayout.musicControlAt(context.motion.current(), pressed_local[0], pressed_local[1]);
-                    if (control != .none) {
+                } else if (!notification_active_now and musicCardActive(context)) {
+                    const action = MusicPage.actionAt(&context.presented_music_layout, .{ .x_px = press.x, .y_px = press.y });
+                    if (action) |music_action| {
                         if (context.music_session) |music| {
-                            const action: MusicSession.Transport = switch (control) {
+                            const controller_action: MusicController.Action = switch (music_action) {
                                 .previous => .previous,
                                 .play_pause => .play_pause,
                                 .next => .next,
-                                .none => unreachable,
                             };
-                            if (!music.requestTransport(action)) Log.logLine("music: transport request could not be sent");
+                            if (!music.requestTransport(MusicController.transportFor(controller_action))) Log.logLine("music: transport request could not be sent");
                         } else {
                             Log.logLine("music: transport controls unavailable for the active window-title player");
                         }
@@ -2927,48 +3030,45 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                     }
                 } else if (!notification_active_now and context.motion.target() == .expanded and !musicCardActive(context) and pointInBox(systemPanelCardBox(context), pressed_local[0], pressed_local[1])) {
                     if (context.sound_page_open) {
-                        _ = handleSoundPageClick(context, pressed_local[0], pressed_local[1]);
+                        _ = handleSoundPageClick(context, pressed_local[0], pressed_local[1], press, slider_press_already_handled);
                     } else if (context.start_page_open) {
                         _ = handleStartPageClick(context, pressed_local[0], pressed_local[1]);
-                    } else if (context.tray_page_open) {
+                    } else if (context.tray_state.page_open) {
                         _ = handleTrayPageClick(context, pressed_local[0], pressed_local[1]);
                     } else {
                         _ = handleSystemPanelClick(context, pressed_local[0], pressed_local[1]);
                     }
-                } else if (task_count > 0 and TaskStripLayout.taskIconUnderPointer(task_island, task_count, pressed_local[0], pressed_local[1]) >= 0) {
-                    const task_index: usize = @intCast(TaskStripLayout.taskIconUnderPointer(task_island, task_count, pressed_local[0], pressed_local[1]));
-                    const target = context.task_windows.entries[task_index].handle;
-                    if (WindowList.foregroundWindow() == target) {
-                        if (context.task_windows.minimize(target)) {
-                            Log.logLine("task button: minimized the foreground window");
-                        } else {
-                            Log.logLine("task button: minimizing the foreground window failed");
+                } else if (TaskbarPage.actionAt(&context.presented_taskbar_view, pressed_local[0], pressed_local[1])) |id| {
+                    if (context.taskbar_state.action(id, context.presented_taskbar_view.catalog_revision)) |action| {
+                        switch (action) {
+                            .minimize => |request| Log.logLine(if (context.task_windows.minimizeIdentity(request)) "task button: minimized the foreground window" else "task button: minimizing the foreground window failed or target became stale"),
+                            .activate => |request| Log.logLine(if (context.task_windows.activateIdentity(request)) "task button: activated the selected window" else "task button: activation failed or target became stale"),
                         }
-                    } else if (context.task_windows.activate(target)) {
-                        Log.logLine("task button: activated the selected window");
                     } else {
-                        Log.logLine("task button: activating the selected window failed");
+                        Log.logLine("task button: stale presented window identity was discarded");
                     }
                     context.task_last_refresh_ms = 0;
                     _ = context.task_windows.refresh();
+                    context.task_windows.snapshot(&context.candidate_taskbar_snapshot);
+                    _ = context.taskbar_state.updateSnapshot(context.candidate_taskbar_snapshot);
                     window.invalidate();
                 } else if (pointInBox(interactive_pill, pressed_local[0], pressed_local[1])) {
-                    if (context.motion.target() == .expanded and context.active_present) {
+                    if (context.motion.target() == .expanded and context.music_state.active_present) {
                         context.system_panel_pinned = !context.system_panel_pinned;
                         if (!context.system_panel_pinned) {
                             context.sound_page_open = false;
                             context.start_page_open = false;
-                            context.tray_page_open = false;
+                            TrayController.closePage(&context.tray_state);
                         }
                         window.invalidate();
                     } else if (context.motion.target() == .expanded) {
                         context.system_panel_pinned = false;
                         context.sound_page_open = false;
                         context.start_page_open = false;
-                        context.tray_page_open = false;
+                        TrayController.closePage(&context.tray_state);
                         _ = context.motion.setTarget(resting_state);
                         window.invalidate();
-                    } else if (context.active_present) {
+                    } else if (context.music_state.active_present) {
                         context.system_panel_pinned = false;
                         _ = context.motion.setTarget(.expanded);
                         window.invalidate();
@@ -2977,7 +3077,7 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
                         context.system_panel_pinned = true;
                         context.sound_page_open = false;
                         context.start_page_open = false;
-                        context.tray_page_open = false;
+                        TrayController.closePage(&context.tray_state);
                         context.card_hang = .system_button;
                         _ = context.motion.setTarget(.expanded);
                         window.invalidate();
@@ -2990,80 +3090,78 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         }
 
         if (context.sound_page_open and context.motion.target() == .expanded and !notification_active) {
-            if (window.leftButtonDown() and context.mixer_drag_row >= 0) {
-                const hit = CardLayout.soundPageHitFor(
-                    systemPanelCardBox(context),
-                    @intCast(context.sound_page_text.device_count),
-                    @intCast(context.sound_page_text.mix_count),
-                    context.sound_page_scroll,
-                    local[0],
-                    local[1],
-                );
-                if (hit.target == .mixer_slider and hit.index == context.mixer_drag_row) setMixerLevel(context, hit.index, hit.fraction);
+            const hovered_sound = if (pointInBox(systemPanelCardBox(context), local[0], local[1]))
+                SoundPage.interactionAt(&context.presented_sound_layout, .{ .x_px = pointer.x, .y_px = pointer.y })
+            else
+                null;
+            context.sound_page_state.setHovered(hovered_sound);
+            if (window.leftButtonDown() and context.input_router.capturedIndex() != null) {
+                const action = context.input_router.route(.{ .move = .{
+                    .point = .{ .x_px = pointer.x, .y_px = pointer.y },
+                    .button_down = true,
+                } }, &context.presented_sound_layout);
+                dispatchInputAction(context, action);
             } else if (!window.leftButtonDown()) {
-                context.mixer_drag_row = -1;
+                _ = context.input_router.route(.cancel, &context.presented_sound_layout);
             }
             if (pointInBox(systemPanelCardBox(context), local[0], local[1])) {
                 const wheel = window.takeWheelNotches();
                 if (wheel != 0) {
-                    const device_count: i32 = @intCast(context.sound_page_text.device_count);
-                    const mix_count: i32 = @intCast(context.sound_page_text.mix_count);
-                    context.sound_page_scroll -= @as(f32, @floatFromInt(wheel)) * 60;
-                    context.sound_page_scroll = std.math.clamp(context.sound_page_scroll, 0, CardLayout.soundPageScrollLimit(systemPanelCardBox(context), device_count, mix_count));
-                    buildSoundPageText(context);
+                    const card = systemPanelCardBox(context);
+                    if (soundPageViewModel(context)) |model| context.sound_page_state.scroll = std.math.clamp(context.sound_page_state.scroll - @as(f32, @floatFromInt(wheel)) * 60, 0, SoundPage.scrollLimit(card, &model));
                     window.invalidate();
                 }
             }
+        } else {
+            if (context.input_router.capturedIndex() != null) _ = context.input_router.route(.cancel, &context.presented_sound_layout);
+            context.sound_page_state.setHovered(null);
+            context.sound_page_state.setPressed(null);
         }
 
-        if (context.tray_page_open and context.motion.target() == .expanded and !notification_active) {
-            const hovered = if (pointInBox(systemPanelCardBox(context), local[0], local[1]))
-                CardLayout.trayPageCellAt(systemPanelCardBox(context), @intCast(context.tray_page_icon_count), local[0], local[1])
+        if (context.tray_state.page_open and context.motion.target() == .expanded and !notification_active) {
+            const hover: TrayPage.Hover = if (pointInBox(systemPanelCardBox(context), local[0], local[1]))
+                TrayPage.hoverAt(&context.presented_tray_view, local[0], local[1])
             else
-                -1;
-            if (hovered != context.tray_hovered_index) {
-                context.tray_hovered_index = hovered;
+                .{};
+            if (hover.icon != context.tray_state.hovered_icon) {
+                context.tray_state.hovered_icon = hover.icon;
                 window.invalidate();
             }
-        } else if (context.tray_hovered_index != -1) {
-            context.tray_hovered_index = -1;
+        } else if (context.tray_state.hovered_icon != -1) {
+            context.tray_state.hovered_icon = -1;
         }
 
-        if (context.tray_menu_open and context.tray_page_open and context.motion.target() == .expanded and !notification_active) {
-            const hovered = CardLayout.trayMenuRowAt(context.tray_menu_layout, local[0], local[1]);
-            if (hovered != context.tray_menu_hovered) {
-                context.tray_menu_hovered = hovered;
+        if (context.tray_state.menu_open and context.tray_state.page_open and context.motion.target() == .expanded and !notification_active) {
+            const hover = TrayPage.hoverAt(&context.presented_tray_view, local[0], local[1]);
+            if (hover.menu_row != context.tray_state.hovered_menu_row) {
+                context.tray_state.hovered_menu_row = hover.menu_row;
                 window.invalidate();
             }
-        } else if (context.tray_menu_open) {
+        } else if (context.tray_state.menu_open) {
             closeTrayMenu(context);
             window.invalidate();
         }
 
         if (context.start_page_open and context.motion.target() == .expanded and !notification_active) {
-            const card = systemPanelCardBox(context);
-            const layout = CardLayout.startPageFor(card);
-            const on_card = pointInBox(card, local[0], local[1]);
-            const pin_hover = if (on_card and context.start_page_state == 0) CardLayout.startPinCellAt(layout, @intCast(context.start_card_text.pin_count), local[0], local[1]) else -1;
-            const picker_hover = if (on_card and context.start_page_state == 1) CardLayout.startPickerRowAt(card, context.start_picker_scroll_row, @intCast(@min(context.start_card_text.list_count, std.math.maxInt(i32))), local[0], local[1]) else -1;
-            const power_hover = if (on_card and context.start_page_state == 2) CardLayout.startPowerRowAt(card, local[0], local[1]) else -1;
-            const button_hover = on_card and CardLayout.startRectHasPoint(layout.power_button, local[0], local[1]);
-            if (pin_hover != context.start_hovered_pin or picker_hover != context.start_hovered_picker_row or power_hover != context.start_hovered_power_row or button_hover != context.start_power_hovered) {
-                context.start_hovered_pin = pin_hover;
-                context.start_hovered_picker_row = picker_hover;
-                context.start_hovered_power_row = power_hover;
-                context.start_power_hovered = button_hover;
+            const hover = LauncherPage.hoverAt(&context.presented_launcher_layout, local[0], local[1]);
+            if (hover.pin != context.start_card_text.hovered_pin or hover.picker_row != context.start_card_text.hovered_picker_row or hover.power_row != context.start_card_text.hovered_power_row or hover.power_button != context.start_card_text.power_button_hovered) {
+                context.start_card_text.hovered_pin = hover.pin;
+                context.start_card_text.hovered_picker_row = hover.picker_row;
+                context.start_card_text.hovered_power_row = hover.power_row;
+                context.start_card_text.power_button_hovered = hover.power_button;
                 buildStartCardText(context);
                 window.invalidate();
             }
-            if (context.start_page_state == 1 and on_card and CardLayout.startRectHasPoint(layout.grid, local[0], local[1])) {
+            if (LauncherPage.inPickerViewport(&context.presented_launcher_layout, local[0], local[1])) {
                 const wheel = window.takeWheelNotches();
                 if (wheel != 0) {
-                    const visible_rows: i32 = @intFromFloat(@max(1, (layout.grid.bottom - layout.grid.top) / CardLayout.start_row_height));
-                    const max_scroll = @max(0, @as(i32, @intCast(@min(context.start_card_text.list_count, std.math.maxInt(i32)))) - visible_rows);
-                    context.start_picker_scroll_row = std.math.clamp(context.start_picker_scroll_row - wheel, 0, max_scroll);
-                    buildStartCardText(context);
-                    window.invalidate();
+                    const visible_rows: i32 = @intFromFloat(@max(1, (context.presented_launcher_layout.layout.grid.bottom - context.presented_launcher_layout.layout.grid.top) / LauncherPage.row_height));
+                    const max_scroll = @max(0, @as(i32, @intCast(@min(context.start_card_text.view.app_count, std.math.maxInt(i32)))) - visible_rows);
+                    if (context.start_apps) |service| {
+                        _ = LauncherController.reduce(&context.launcher_state, .{ .scroll_picker = .{ .wheel = wheel, .max_row = max_scroll } }, service.pins.items, service.list.items);
+                        buildStartCardText(context);
+                        window.invalidate();
+                    }
                 }
             }
         }
@@ -3093,11 +3191,11 @@ fn pointerStep(raw_context: ?*anyopaque) callconv(.winapi) void {
         if (context.motion.target() != forced) _ = context.motion.setTarget(forced);
     }
     const shape_animating = context.motion.isAnimating();
-    const lyric_roll_animating = context.active_present and context.lyric_line_age_seconds < Lyrics.line_enter_seconds;
-    const active_music_meter = context.active_playing and activeNotification(context, now) == null;
+    const lyric_roll_animating = context.music_state.active_present and context.lyric_line_age_seconds < Lyrics.line_enter_seconds;
+    const active_music_meter = context.music_state.active_playing and activeNotification(context, now) == null;
     const poll_ms = pointerPollIntervalFor(
         shape_animating or context.status_strip_animating or lyric_scroll_animating or lyric_roll_animating or hover_animation_active,
-        context.wechat.call_notification_id != 0,
+        callNotificationId(context) != 0,
         active_music_meter,
     );
     window.setPointerPollInterval(poll_ms);
@@ -3129,6 +3227,7 @@ fn refreshDisplayGeometry(raw_context: ?*anyopaque) callconv(.winapi) void {
         Log.logLine("display change: window bounds could not be updated");
         return;
     }
+    context.text_renderer.invalidateDeviceResources();
     context.renderer.shutdown();
     window_width_px = width_px;
     window_height_px = height_px;
@@ -3149,6 +3248,7 @@ fn refreshDisplayGeometry(raw_context: ?*anyopaque) callconv(.winapi) void {
         Log.logLine("display change: renderer could not be recreated for the new monitor geometry");
         return;
     }
+    context.renderer_generation = context.renderer.generation;
     if (context.app_bar_reclaim) {
         context.bar_thickness_px = Geometry.dipToPixels(Geometry.reserved_bar_height_dip, monitor.dpi);
         if (context.app_bar) |bar| _ = bar.claim(hwnd, .top, context.bar_thickness_px);
@@ -3156,6 +3256,36 @@ fn refreshDisplayGeometry(raw_context: ?*anyopaque) callconv(.winapi) void {
     _ = updateInputRegion(context);
     Log.logLine("display change: window and renderer synchronized to monitor geometry");
     window.invalidate();
+}
+
+fn rebuildGraphicsResources(
+    renderer: *Renderer.DeviceResources,
+    text_renderer: *TextRenderer.TextRenderer,
+    hwnd: HWND,
+    width_px: i32,
+    height_px: i32,
+    scale: f32,
+) bool {
+    if (width_px <= 0 or height_px <= 0) return false;
+    text_renderer.invalidateDeviceResources();
+    renderer.shutdown();
+    return renderer.initialize(hwnd, @intCast(width_px), @intCast(height_px), scale);
+}
+
+fn recoverGraphicsDevice(context: *PaintContext, now_ms: u64) bool {
+    if (context.last_graphics_recovery_ms != 0 and now_ms -| context.last_graphics_recovery_ms < 1000) return false;
+    context.last_graphics_recovery_ms = now_ms;
+    const window = context.window orelse return false;
+    const hwnd = window.handle() orelse return false;
+    if (!rebuildGraphicsResources(context.renderer, context.text_renderer, hwnd, window_width_px, window_height_px, context.scale)) {
+        context.renderer_generation = context.renderer.generation;
+        Log.logLine("renderer: graphics-device rebuild failed; a later paint may retry");
+        return false;
+    }
+    context.renderer_generation = context.renderer.generation;
+    window.invalidate();
+    Log.logLine("renderer: graphics-device resources rebuilt; UI snapshots retained");
+    return true;
 }
 
 fn maintainShellState(context: ?*anyopaque) callconv(.winapi) void {
@@ -3182,6 +3312,10 @@ fn runSmokeCheck(name: []const u8, exit_code: i32, check: *const fn () bool) ?i3
     return exit_code;
 }
 
+fn notificationIconSmokeCheck() bool {
+    return NotificationIcon.smokeCheck(AppIconService.fetchFileIconPng);
+}
+
 fn runSelfTest() i32 {
     const self_test_com_result = CoInitializeEx(null, coinit_apartment_threaded);
     if (self_test_com_result < 0 and self_test_com_result != rpc_e_changed_mode) return 3;
@@ -3193,34 +3327,37 @@ fn runSelfTest() i32 {
     if (runSmokeCheck("card button anchors", 56, cardAnchorPolicyCheck)) |failure| return failure;
     if (runSmokeCheck("MiniJson", 12, MiniJson.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("Notification", 13, Notification.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("DisplayBrightness", 14, DisplayBrightness.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("NotificationInput", 60, NotificationInput.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("DisplayBrightness", 14, SystemService.brightnessSmokeCheck)) |failure| return failure;
     if (runSmokeCheck("Monitor", 15, Monitor.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("NotificationIcon", 16, NotificationIcon.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("StartMenu", 17, StartMenu.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("NotificationIcon", 16, notificationIconSmokeCheck)) |failure| return failure;
+    if (runSmokeCheck("StartMenu", 17, ShellCommand.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("Log", 18, Log.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("MusicSession", 36, MusicSession.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("MusicSession", 36, MediaService.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("ToastStore", 20, ToastStore.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("AppBar", 21, AppBar.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("PlayerWindow", 22, PlayerWindow.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("WindowList", 23, WindowList.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("Theme", 24, Theme.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("WeChatWatch", 25, WeChatWatch.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("ThumbnailPreview", 26, ThumbnailPreview.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("ThumbnailLayout", 26, ThumbnailLayout.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("NativeTaskbar", 27, NativeTaskbar.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("SystemStatus", 28, SystemStatus.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("SystemStatus", 28, SystemService.statusSmokeCheck)) |failure| return failure;
     if (runSmokeCheck("TrayIcons", 29, TrayIcons.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("SysStatusProbe", 30, SysStatusProbe.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("GlassMaterial", 31, GlassMaterial.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("WicImage", 32, WicImage.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("music-card background blur", 58, WicImage.backgroundBlurCheck)) |failure| return failure;
-    if (runSmokeCheck("SystemToggles", 33, SystemToggles.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("SystemToggles", 33, SystemService.togglesSmokeCheck)) |failure| return failure;
     if (runSmokeCheck("AudioVolume", 34, AudioVolume.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("Weather", 35, Weather.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("Weather source", 35, WeatherService.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("Lyrics", 37, Lyrics.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("Lyrics", 50, Lyrics.workerSmokeCheck)) |failure| return failure;
-    if (runSmokeCheck("SoundOutput", 38, SoundOutput.smokeCheck)) |failure| return failure;
-    if (runSmokeCheck("StartApps", 39, StartApps.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("Lyrics", 50, LyricsService.workerSmokeCheck)) |failure| return failure;
+    if (runSmokeCheck("AudioService", 38, AudioService.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("StartApps", 39, LauncherService.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("TrayPress", 40, TrayPress.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("TaskbarCatalog", 61, TaskbarCatalog.smokeCheck)) |failure| return failure;
+    if (runSmokeCheck("TaskbarController", 62, TaskbarController.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("Renderer", 41, Renderer.smokeCheck)) |failure| return failure;
     if (runSmokeCheck("per-window DPI awareness", 53, nativeWindowDpiCheck)) |failure| return failure;
     if (runSmokeCheck("animated input region", 54, InputRegion.smokeCheck)) |failure| return failure;
@@ -3233,21 +3370,20 @@ fn runSelfTest() i32 {
         return 47;
     }
     defer test_text_renderer.shutdown();
+    var sample_weather = StatusLineWeather.View{ .mark = .sun };
+    @memcpy(sample_weather.sky[0..3], &[_]u16{ 0x5f3a, 0x9635, 0x96e8 });
+    @memcpy(sample_weather.temperature[0..4], &[_]u16{ '-', '1', '2', 0x00b0 });
     const widest_status = test_text_renderer.measureStatusLine(
         &.{ 0x5468, 0x4e09 },
         &.{ '1', '2', 0x6708, '2', '8', 0x65e5 },
         &.{ '2', '3', ':', '5', '9' },
-        &.{ 0x5f3a, 0x9635, 0x96e8 },
-        &.{ '-', '1', '2', 0x00b0 },
-        0,
+        sample_weather,
     );
     const no_weather_status = test_text_renderer.measureStatusLine(
         &.{ 0x5468, 0x4e09 },
         &.{ '1', '2', 0x6708, '2', '8', 0x65e5 },
         &.{ '2', '3', ':', '5', '9' },
-        &.{},
-        &.{},
-        -1,
+        .{},
     );
     if (widest_status <= 0 or widest_status > Geometry.pill_width_dip - 16 or
         no_weather_status <= 0 or no_weather_status >= widest_status)
@@ -3300,7 +3436,7 @@ fn runSelfTest() i32 {
     if (!IslandWindow.smokeCheck()) return 43;
     if (!TextRenderer.smokeCheck()) return 44;
     if (!Setup.smokeCheck()) return 45;
-    if (!TaskStripLayout.smokeCheck()) return 46;
+    if (!BarControlLayout.smokeCheck()) return 46;
     if (!CardLayout.smokeCheck()) return 49;
     const pill = Geometry.pillBox(0.0, 0.0, 1920.0, 0.0);
     if (!Geometry.contains(pill, 960.0, 24.0)) return 7;
@@ -3347,7 +3483,8 @@ const MusicPreviewContext = struct {
     renderer: *Renderer.DeviceResources,
     text_renderer: *TextRenderer.TextRenderer,
     motion: Motion.Motion,
-    music_card: *const TextRenderer.MusicCardText,
+    music_card: *const MusicPage.CardText,
+    music_strip: MusicPage.StripText = .{},
     lyric: []const u8,
     stage: usize = 0,
     stage_started_ms: u64 = 0,
@@ -3365,16 +3502,22 @@ fn paintMusicPreview(window: HWND, raw_context: ?*anyopaque) callconv(.winapi) v
         (if (stage.fallback_title) context.music_card.title else context.lyric)
     else
         &.{};
+    context.music_strip.line = music_text;
     const pill = Renderer.PillAppearance{
         .box = context.motion.current(),
-        .music_text = music_text,
-        .music_card = if (stage.state == .expanded) context.music_card else null,
+        .line_text = music_text,
+        .music_present = stage.state == .music_strip or stage.state == .hover,
+        .resting_state = if (stage.state == .music_strip or stage.state == .hover) .music_strip else .collapsed,
+        .resting_pill = context.motion.current(),
+        .feature_strip_painter = .{ .context = @ptrCast(&context.music_strip), .paint_fn = MusicPage.paintStrip },
+        .feature_page_painter = if (stage.state == .expanded) .{ .context = @ptrCast(@constCast(context.music_card)), .paint_fn = MusicPage.paintCard } else null,
+        .feature_page_box = if (stage.state == .expanded) context.motion.current() else null,
+        .feature_page_reveal = if (stage.state == .expanded) Geometry.height(context.motion.current().rect) else 0,
     };
     _ = context.renderer.renderPill(
         pill,
         context.text_renderer,
         if (stage.state == .expanded) .card else .compact,
-        .{ .temperature_c = 0, .weather_code = -1 },
     );
     _ = EndPaint(window, &paint);
 }
@@ -3430,23 +3573,23 @@ fn runMusicPreview() i32 {
         art_pixels[offset + 2] = 120 +| @as(u8, @intCast((x + y) % 64 * 2)) +| band;
         art_pixels[offset + 3] = 255;
     };
-    var artwork_png: [MusicSession.artwork_capacity]u8 = undefined;
+    var artwork_png: [MediaService.artwork_capacity]u8 = undefined;
     const artwork_len = WicImage.encodeBgraToPng(&art_pixels, 64, 64, &artwork_png);
-    var background_png: [MusicSession.artwork_capacity]u8 = undefined;
+    var background_png: [MediaService.artwork_capacity]u8 = undefined;
     const background_len = if (artwork_len > 0)
         WicImage.makeBlurredBackgroundPng(artwork_png[0..artwork_len], 105, 59, &background_png)
     else
         0;
-    var icon_png: [MusicSession.artwork_capacity]u8 = undefined;
+    var icon_png: [MediaService.artwork_capacity]u8 = undefined;
     var player_path: [260]u16 = @splat(0);
-    const player_found = MusicSession.executableFromAppId(&.{ 'Q', 'Q', 'M', 'u', 's', 'i', 'c', '.', 'e', 'x', 'e' }, &player_path);
+    const player_found = MediaService.executableFromAppId(&.{ 'Q', 'Q', 'M', 'u', 's', 'i', 'c', '.', 'e', 'x', 'e' }, &player_path);
     var icon_len: usize = 0;
-    if (player_found) icon_len = MusicSession.fetchAppIconForTest(&player_path, &icon_png);
+    if (player_found) icon_len = AppIconService.fetchFileIconPng(&player_path, &icon_png);
     if (icon_len == 0) {
         var self_path: [260]u16 = @splat(0);
         const path_len = GetModuleFileNameW(null, &self_path, @intCast(self_path.len));
         if (path_len > 0 and path_len < self_path.len) {
-            icon_len = MusicSession.fetchAppIconForTest(self_path[0..path_len], &icon_png);
+            icon_len = AppIconService.fetchFileIconPng(self_path[0..path_len], &icon_png);
         }
     }
     logFormatted("music preview: artwork={s}, source icon={s}", .{
@@ -3454,7 +3597,7 @@ fn runMusicPreview() i32 {
         if (icon_len > 0) "loaded" else "unavailable",
     });
 
-    var card = TextRenderer.MusicCardText{
+    var card = MusicPage.CardText{
         .title = "东大街",
         .artist = "张超洋",
         .album = "东大街",
@@ -3526,7 +3669,6 @@ fn paintDemo(window: HWND, raw_context: ?*anyopaque) callconv(.winapi) void {
         pill,
         context.text_renderer,
         .compact,
-        .{ .temperature_c = 0, .weather_code = -1 },
     );
     _ = EndPaint(window, &paint);
     if (context.motion.isAnimating()) _ = context.renderer.waitForCompositorClock(8);
@@ -3758,14 +3900,18 @@ pub fn main() void {
     }
     defer native_taskbar.restore();
 
-    var monitor = Monitor.queryMonitor(null);
-    var dpi = monitor.dpi;
-    window_width_px = Monitor.screenWidth(monitor);
-    window_height_px = Geometry.dipToPixels(Geometry.window_height_dip, dpi);
-    const width_px = window_width_px;
-    var height_px = window_height_px;
-    const x = monitor.screen.left;
-    const y = monitor.screen.top;
+    var host = AppWindowHost.WindowHost{};
+    defer host.destroy();
+    if (!host.initialize(options.appbar, options.keep_taskbar, paintWindow, maintainShellState)) return;
+    const monitor = host.monitor;
+    const dpi = host.dpi;
+    window_width_px = host.width_px;
+    window_height_px = host.height_px;
+    const width_px = host.width_px;
+    const height_px = host.height_px;
+    const x = host.x;
+    const y = host.y;
+    const window: *IslandWindow.NativeWindow = &host.window;
 
     var motion: Motion.Motion = .{};
     const anchor = Motion.anchorForWindow(
@@ -3778,51 +3924,22 @@ pub fn main() void {
     if (options.system_panel) _ = motion.setTarget(.expanded);
     if (options.forced_state) |forced| _ = motion.setTarget(forced);
 
-    var app_bar = AppBar.AppBar{};
-    defer app_bar.release();
-
-    var window = IslandWindow.NativeWindow{};
-    if (!window.create(x, y, width_px, height_px, 0, paintWindow, maintainShellState, @ptrCast(&window))) return;
-    defer window.destroy();
-    const actual_window_dpi = window.dpi();
-    if (actual_window_dpi != 0 and actual_window_dpi != dpi) {
-        dpi = actual_window_dpi;
-        monitor.dpi = actual_window_dpi;
-        monitor.dpi_y = actual_window_dpi;
-        height_px = Geometry.dipToPixels(Geometry.window_height_dip, dpi);
-        window_height_px = height_px;
-        if (!window.setBounds(x, y, width_px, height_px)) return;
-        motion.setAnchor(Motion.anchorForWindow(
-            Geometry.pixelsToDip(x, dpi),
-            Geometry.pixelsToDip(y, dpi),
-            Geometry.pixelsToDip(width_px, dpi),
-            Geometry.pixelsToDip(Monitor.taskbarThickness(monitor), dpi),
-        ));
-    }
-    window.setAppBar(&app_bar);
-
-    var thumbnail_preview = ThumbnailPreview.ThumbnailPreview{};
+    var thumbnail_preview = ThumbnailAdapter.ThumbnailAdapter{};
     const thumbnail_preview_ready = thumbnail_preview.create(window.handle());
     Log.logLine(if (thumbnail_preview_ready) "thumbnail: task preview ready after 350 ms hover" else "thumbnail: preview window could not be created");
     defer thumbnail_preview.destroy();
 
-    var app_bar_result: AppBar.AppBarResult = .no_window;
-    const app_bar_thickness_px = Geometry.dipToPixels(Geometry.reserved_bar_height_dip, dpi);
-    if (options.appbar and !options.keep_taskbar) {
-        app_bar_result = app_bar.claim(window.handle(), .top, app_bar_thickness_px);
-        Log.logLine(if (app_bar_result == .registered) "appbar: reserved the top work-area strip" else "appbar: reservation failed; using a floating bar");
-    }
-    if (!options.keep_taskbar and manage_native_taskbar and !options.keep_strip and app_bar_result != .registered) {
+    if (!options.keep_taskbar and manage_native_taskbar and !options.keep_strip and host.app_bar_result != .registered) {
         const released = native_taskbar.releaseWorkArea();
         release_taskbar_strip = released.released;
         Log.logLine(if (released.released) "taskbar work-area strip released" else "taskbar work-area strip could not be released");
     } else if (options.keep_strip) {
         Log.logLine("taskbar work-area strip retained (--keep-strip)");
-    } else if (app_bar_result == .registered) {
+    } else if (host.app_bar_result == .registered) {
         Log.logLine("taskbar work-area strip remains reserved by the AppBar");
     }
 
-    var renderer = Renderer.DeviceResources{};
+    var renderer = Renderer.DeviceResources{ .fetch_app_icon_png = AppIconService.fetchFileIconPng };
     if (!renderer.initialize(window.handle(), @intCast(width_px), @intCast(height_px), @as(f32, @floatFromInt(dpi)) / 96.0)) return;
     defer renderer.shutdown();
 
@@ -3830,139 +3947,75 @@ pub fn main() void {
     if (!text_renderer.initialize()) return;
     defer text_renderer.shutdown();
 
-    var notification_server = NotificationPipe.NotificationServer{};
-    const notification_server_started = notification_server.start(NotificationPipe.pipe_name);
-    Log.logLine(if (notification_server_started) "notification pipe started" else "notification pipe could not be started");
-    defer if (notification_server_started) notification_server.stop();
-    var notifications = Notification.Store{};
-
     const no_media = environmentSwitchEnabled(wide_no_media);
     const no_session = environmentSwitchEnabled(wide_no_session);
     const media_sources = mediaSourceAvailabilityFor(no_media, no_session);
-    var music_session = MusicSession.MusicSession{};
-    const music_started = media_sources.session and music_session.start();
-    Log.logLine(if (music_started)
-        "music session worker started"
-    else if (no_media)
-        "music disabled by ISLANDBAR_NO_MEDIA"
-    else if (no_session)
-        "music session disabled by ISLANDBAR_NO_SESSION; player-window fallback remains active"
-    else
-        "music session API unavailable; continuing without music");
-    defer if (music_started) {
-        Log.logLine("shutdown: stopping music session worker");
-        music_session.stop();
-        Log.logLine("shutdown: music session worker stopped");
-    };
-
-    var lyrics_provider = Lyrics.LyricsProvider{};
-    const lyrics_started = lyrics_provider.start();
-    Log.logLine(if (lyrics_started) "lyrics worker started" else "lyrics worker unavailable; continuing without lyrics");
-    defer {
-        Log.logLine("shutdown: stopping lyrics worker");
-        lyrics_provider.stop();
-        Log.logLine("shutdown: lyrics worker stopped");
-    }
-
-    var player_window = PlayerWindow.PlayerWindowWatch{};
-    const player_window_started = media_sources.player_window and player_window.start();
-    Log.logLine(if (player_window_started)
-        "player window fallback started"
-    else if (no_media)
-        "player window fallback disabled by ISLANDBAR_NO_MEDIA"
-    else
-        "player window fallback unavailable");
-    defer if (player_window_started) {
-        Log.logLine("shutdown: stopping player-window worker");
-        player_window.stop();
-        Log.logLine("shutdown: player-window worker stopped");
-    };
-
-    var status_reader = SystemStatus.SystemStatusReader{};
-    _ = status_reader.open();
-    defer status_reader.close();
-    var sampled_system_status = SystemStatus.SystemStatus{};
-    status_reader.sample(&sampled_system_status);
-    var audio_volume = AudioVolume.AudioVolume{};
-    const audio_volume_started = audio_volume.start();
-    Log.logLine(if (audio_volume_started) "audio volume worker started" else "audio volume worker unavailable");
-    defer audio_volume.stop();
-    var initial_volume: f32 = 0;
-    _ = audio_volume.get(&initial_volume);
-    var sound_output = SoundOutput.SoundOutput{};
-    const sound_started = sound_output.start();
-    Log.logLine(if (sound_started) "sound output worker started" else "sound output worker unavailable");
-    defer {
-        Log.logLine("shutdown: stopping sound-output worker");
-        sound_output.stop();
-        Log.logLine("shutdown: sound-output worker stopped");
-    }
-    var tray_icons = TrayIcons.TrayIcons{};
-    const initial_tray_count = tray_icons.refresh(std.heap.page_allocator);
-    Log.logLine(if (initial_tray_count == 0) "tray icon snapshots unavailable or empty" else "tray icon snapshots loaded");
-    defer tray_icons.deinit(std.heap.page_allocator);
-    var start_apps = StartApps.StartApps{};
-    start_apps.loadPins();
-    defer start_apps.deinit();
+    var runtime = AppRuntime.Runtime{};
+    runtime.startBackground(media_sources.session, media_sources.player_window, no_media, no_session, AppIconService.fetchFileIconPng);
+    defer runtime.stop();
+    var notifications = Notification.Store{};
+    var sound_controller = SoundController.Controller{ .port = AppRuntime.soundControllerPort(&runtime.sound_ports) };
+    runtime.initializeSoundController(&sound_controller);
+    _ = runtime.initializeShellResources(std.heap.page_allocator);
     var account_name: [256]u16 = @splat(0);
     var account_name_size: u32 = @intCast(account_name.len);
     _ = GetUserNameW(&account_name, &account_name_size);
     const start_pin_icon_data = std.heap.page_allocator.alloc(u8, 18 * start_icon_buffer_bytes) catch return;
     defer std.heap.page_allocator.free(start_pin_icon_data);
     var initial_brightness: i32 = 50;
-    const initial_brightness_available = DisplayBrightness.readBrightnessPercent(monitor.monitor, &initial_brightness);
+    const initial_brightness_available = SystemService.readBrightness(monitor.monitor, &initial_brightness);
     const fullscreen_disabled = environmentSwitchEnabled(wide_no_fullscreen);
 
     var paint_context = PaintContext{
         .renderer = &renderer,
+        .renderer_generation = renderer.generation,
         .text_renderer = &text_renderer,
         .pill = .{
             .box = motion.current(),
         },
         .motion = motion,
-        .window = &window,
+        .window = window,
         .thumbnail_preview = if (thumbnail_preview_ready) &thumbnail_preview else null,
         .window_x = x,
         .window_y = y,
         .scale = @as(f32, @floatFromInt(dpi)) / 96.0,
-        .music_session = if (music_started) &music_session else null,
-        .audio_volume = if (audio_volume_started) &audio_volume else null,
-        .tray_icons = &tray_icons,
+        .music_session = if (runtime.music_started) &runtime.music_session else null,
+        .sound_controller = &sound_controller,
+        .sound_ports = &runtime.sound_ports,
+        .weather_reader = &runtime.weather_reader,
+        .tray_icons = &runtime.tray_icons,
         .tray_last_refresh_ms = GetTickCount64(),
-        .start_apps = &start_apps,
+        .start_apps = &runtime.start_apps,
         .start_pin_icon_data = start_pin_icon_data,
         .account_name = account_name,
-        .sound_output = if (sound_started) &sound_output else null,
-        .sound_snapshot = if (sound_started) sound_output.snapshot() else .{},
-        .last_sound_revision = if (sound_started) sound_output.revision() else 0,
-        .status_reader = &status_reader,
+        .status_reader = &runtime.status_reader,
         .monitor = monitor.monitor,
         .monitor_bounds = monitor.screen,
         .monitor_work = monitor.work,
-        .app_bar = &app_bar,
-        .app_bar_reclaim = app_bar_result == .registered,
-        .bar_thickness_px = app_bar_thickness_px,
+        .app_bar = &host.app_bar,
+        .app_bar_reclaim = host.app_bar_result == .registered,
+        .bar_thickness_px = host.bar_thickness_px,
         .fullscreen_disabled = fullscreen_disabled,
-        .last_weather_revision = weather_reader.getRevision(),
-        .system_status = sampled_system_status,
+        .trace_ui_enabled = environmentSwitchEnabled(wide_ui_trace),
+        .last_weather_revision = 0,
+        .system_state = .{
+            .status = runtime.sampled_system_status,
+            .installed_layout_count = runtime.status_reader.layoutCount(),
+            .brightness_available = initial_brightness_available,
+            .brightness_percent = initial_brightness,
+        },
         .status_sampled_ms = GetTickCount64(),
-        .installed_layout_count = status_reader.layoutCount(),
-        .volume_level = initial_volume,
-        .volume_muted = audio_volume.isMuted(),
-        .brightness_available = initial_brightness_available,
-        .brightness_percent = initial_brightness,
         .system_panel_pinned = options.system_panel,
         .forced_start_hover = options.start_hover,
         .forced_state = options.forced_state,
-        .lyrics_provider = &lyrics_provider,
-        .player_window = if (player_window_started) &player_window else null,
-        .notification_server = if (notification_server_started) &notification_server else null,
+        .lyrics_provider = &runtime.lyrics_provider,
+        .player_window = if (runtime.player_window_started) &runtime.player_window else null,
+        .notification_server = if (runtime.notification_server_started) &runtime.notification_server else null,
         .notifications = &notifications,
     };
     _ = paint_context.task_windows.refresh();
     paint_context.task_last_refresh_ms = GetTickCount64();
     buildSystemPanelText(&paint_context);
-    buildSoundPageText(&paint_context);
     buildTrayPageText(&paint_context);
     buildStartCardText(&paint_context);
     window.callback_context = &paint_context;
@@ -3973,19 +4026,16 @@ pub fn main() void {
     window.setWheelHitTestCallback(nativeWheelHitTest);
     _ = updateInputRegion(&paint_context);
 
-    if (!renderer.renderPill(paint_context.pill, &text_renderer, paint_context.clock_style, .{ .temperature_c = 0, .weather_code = -1 })) return;
-
-    var weather_started = false;
-    if (!options.offline) {
-        weather_started = weather_reader.start();
-        if (!weather_started) Log.logLine("weather worker could not be started");
+    if (!renderer.renderPill(paint_context.pill, &text_renderer, paint_context.clock_style)) {
+        if (!renderer.lastFailureIsDeviceLoss() or
+            !rebuildGraphicsResources(&renderer, &text_renderer, window.handle(), width_px, height_px, paint_context.scale)) return;
+        paint_context.renderer_generation = renderer.generation;
+        if (!renderer.renderPill(paint_context.pill, &text_renderer, paint_context.clock_style)) return;
     }
-    defer if (weather_started) {
-        Log.logLine("shutdown: stopping weather worker");
-        weather_reader.stop();
-        Log.logLine("shutdown: weather worker stopped");
-    };
+
+    runtime.startWeather(!options.offline);
+    defer runtime.stopWeather();
     window.show();
-    const loop_result = window.messageLoop();
+    const loop_result = host.messageLoop();
     if (loop_result != 0) ExitProcess(6);
 }

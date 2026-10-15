@@ -1,5 +1,5 @@
 const std = @import("std");
-const NotificationModule = @import("Notification");
+const NotificationInput = @import("NotificationInput");
 
 const HANDLE = ?*anyopaque;
 const DWORD = u32;
@@ -17,7 +17,6 @@ extern "kernel32" fn LoadLibraryW(name: [*:0]const u16) callconv(.winapi) HANDLE
 extern "kernel32" fn FreeLibrary(module: HANDLE) callconv(.winapi) BOOL;
 extern "kernel32" fn GetProcAddress(module: HANDLE, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
 extern "kernel32" fn GetEnvironmentVariableW(name: [*:0]const u16, output: [*]u16, size: DWORD) callconv(.winapi) DWORD;
-extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "kernel32" fn MultiByteToWideChar(code_page: DWORD, flags: DWORD, input: [*:0]const u8, input_length: i32, output: [*]u16, output_length: i32) callconv(.winapi) i32;
 extern "kernel32" fn WideCharToMultiByte(code_page: DWORD, flags: DWORD, input: [*:0]const u16, input_length: i32, output: [*]u8, output_length: i32, default_char: ?[*:0]const u8, used_default: ?*i32) callconv(.winapi) i32;
 
@@ -344,8 +343,8 @@ pub const ToastReader = struct {
         return statement;
     }
 
-    pub fn poll(self: *ToastReader, store: *NotificationModule.Store) usize {
-        if (self.database == null) return 0;
+    pub fn poll(self: *ToastReader, output: []NotificationInput.Message) usize {
+        if (self.database == null or output.len == 0) return 0;
         if (!self.primed) {
             const stmt = self.prepare("SELECT IFNULL(MAX(Id), 0) FROM Notification") orelse return 0;
             defer {
@@ -363,6 +362,7 @@ pub const ToastReader = struct {
         _ = self.api.bind_int64.?(stmt, 1, self.last_id);
         var added: usize = 0;
         while (self.api.step.?(stmt) == sqlite_row) {
+            if (added >= output.len) break;
             const id = self.api.column_int64.?(stmt, 0);
             if (id > self.last_id) self.last_id = id;
             const blob = self.api.column_blob.?(stmt, 2) orelse continue;
@@ -370,7 +370,7 @@ pub const ToastReader = struct {
             if (byte_count_i32 <= 0 or byte_count_i32 > max_payload_bytes) continue;
             const byte_count: usize = @intCast(byte_count_i32);
             const xml: [*]const u8 = @ptrCast(blob);
-            var notification = NotificationModule.Notification{};
+            var notification = NotificationInput.Message{ .source = .windows_toast, .source_key = @intCast(@max(0, id)) };
             if (!toastTextFromXml(xml[0..byte_count], &notification.title, &notification.body)) continue;
             if (self.api.column_text.?(stmt, 1)) |handler| {
                 var handler_wide: [256]u16 = @splat(0);
@@ -380,7 +380,7 @@ pub const ToastReader = struct {
                 _ = WideCharToMultiByte(65001, 0, @ptrCast(&app_wide), -1, &notification.app, notification.app.len, null, null);
             }
             if (notification.title[0] == 0 and notification.body[0] == 0) continue;
-            _ = store.pushAt(notification, GetTickCount64());
+            output[added] = notification;
             added += 1;
             self.taken += 1;
         }
@@ -404,8 +404,8 @@ pub const ToastReader = struct {
             if (self.api.column_text.?(stmt, 1)) |handler| _ = MultiByteToWideChar(65001, 0, handler, -1, &handler_wide, handler_wide.len);
             var app: [128]u16 = @splat(0);
             friendlyNameFromHandlerId(&handler_wide, &app);
-            var title: [NotificationModule.title_capacity]u8 = @splat(0);
-            var body: [NotificationModule.body_capacity]u8 = @splat(0);
+            var title: [NotificationInput.title_capacity]u8 = @splat(0);
+            var body: [NotificationInput.body_capacity]u8 = @splat(0);
             if (self.api.column_blob.?(stmt, 2)) |blob| {
                 const count = self.api.column_bytes.?(stmt, 2);
                 if (count > 0 and count <= max_payload_bytes) {
@@ -438,4 +438,15 @@ pub fn smokeCheck() bool {
     var app: [64]u16 = @splat(0);
     friendlyNameFromHandlerId(&.{ 'O', 'p', 'e', 'n', 'A', 'I', '.', 'C', 'o', 'd', 'e', 'x', '_', 'x', '!', 'A', 'p', 'p', 0 }, &app);
     return std.mem.eql(u16, app[0..5], &.{ 'C', 'o', 'd', 'e', 'x' });
+}
+
+test "toast XML adapter extracts readable text and handler names" {
+    var title: [80]u8 = @splat(0);
+    var body: [160]u8 = @splat(0);
+    try std.testing.expect(toastTextFromXml("<toast><text>One &amp; two</text><text>second</text></toast>", &title, &body));
+    try std.testing.expectEqualStrings("One & two", cString(&title));
+    try std.testing.expectEqualStrings("second", cString(&body));
+    var app: [64]u16 = @splat(0);
+    friendlyNameFromHandlerId(&.{ 'O', 'p', 'e', 'n', 'A', 'I', '.', 'C', 'o', 'd', 'e', 'x', '_', 'x', '!', 'A', 'p', 'p', 0 }, &app);
+    try std.testing.expectEqualSlices(u16, &.{ 'C', 'o', 'd', 'e', 'x' }, app[0..5]);
 }

@@ -124,7 +124,7 @@ fn color(r: f32, g: f32, b: f32, a: f32) Color {
 }
 
 fn themeInk(theme: *const ThemeModule.Theme, alpha: f32) Color {
-    return .{ .r = theme.ink.r, .g = theme.ink.g, .b = theme.ink.b, .a = alpha };
+    return .{ .r = theme.tokens.ink.r, .g = theme.tokens.ink.g, .b = theme.tokens.ink.b, .a = alpha };
 }
 
 pub fn smokeCheck() bool {

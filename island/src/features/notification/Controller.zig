@@ -1,5 +1,5 @@
 const std = @import("std");
-const MiniJson = @import("MiniJson");
+const NotificationInput = @import("NotificationInput");
 
 pub const max_notifications = 32;
 pub const app_name_capacity = 64;
@@ -7,7 +7,7 @@ pub const title_capacity = 160;
 pub const body_capacity = 512;
 pub const display_ms = 6000;
 
-pub const Urgency = enum(i32) { normal = 0, low = 1, high = 2 };
+pub const Urgency = NotificationInput.Urgency;
 
 pub const Notification = struct {
     id: i64 = 0,
@@ -20,108 +20,35 @@ pub const Notification = struct {
     urgency: Urgency = .normal,
     read: bool = false,
     sticky: bool = false,
+    source: NotificationInput.Source = .pipe,
+    source_key: u64 = 0,
 
-    pub fn fromJson(document: []const u8) ?Notification {
-        var parsed = Notification{};
-        _ = MiniJson.getString(document, "title", &parsed.title);
-        _ = MiniJson.getString(document, "body", &parsed.body);
-        if (field(&parsed.title).len == 0 and field(&parsed.body).len == 0) return null;
-
-        var app: [app_name_capacity]u8 = @splat(0);
-        var icon: [260]u8 = @splat(0);
-        var urgency: [16]u8 = @splat(0);
-        _ = MiniJson.getString(document, "app", &app);
-        _ = MiniJson.getString(document, "icon", &icon);
-        _ = MiniJson.getString(document, "urgency", &urgency);
-        copyField(&parsed.app, field(&app));
-        copyField(&parsed.icon_path, field(&icon));
-
-        if (std.ascii.eqlIgnoreCase(field(&urgency), "high")) {
-            parsed.urgency = .high;
-        } else if (std.ascii.eqlIgnoreCase(field(&urgency), "low")) {
-            parsed.urgency = .low;
-        }
-        if (MiniJson.getInt(document, "sticky")) |sticky| parsed.sticky = sticky != 0;
-        return parsed;
+    pub fn fromInput(input: NotificationInput.Message) Notification {
+        return .{
+            .app = input.app,
+            .title = input.title,
+            .body = input.body,
+            .icon_path = input.icon_path,
+            .sender_pid = input.sender_pid,
+            .urgency = input.urgency,
+            .sticky = input.sticky,
+            .source = input.source,
+            .source_key = input.source_key,
+        };
     }
 
-    /// Serializes a notification as a complete JSON object, or null if output is too small.
-    pub fn toJson(self: *const Notification, output: []u8, append_id: bool) ?[]const u8 {
-        if (output.len == 0) return null;
-        output[0] = 0;
-        var writer = JsonWriter{ .output = output };
-        writer.append("{");
-        var first = true;
-        if (append_id) {
-            var number: [32]u8 = undefined;
-            const text = std.fmt.bufPrint(&number, "{d}", .{self.id}) catch return null;
-            writer.fieldPrefix(&first, "id");
-            writer.append(text);
-        }
-        writer.stringField(&first, "app", field(&self.app));
-        writer.stringField(&first, "title", field(&self.title));
-        writer.stringField(&first, "body", field(&self.body));
-        writer.stringField(&first, "icon", field(&self.icon_path));
-        writer.stringField(&first, "urgency", switch (self.urgency) {
-            .normal => "normal",
-            .low => "low",
-            .high => "high",
-        });
-        if (self.sticky) {
-            writer.fieldPrefix(&first, "sticky");
-            writer.append("1");
-        }
-        writer.append("}");
-        if (writer.failed) {
-            output[0] = 0;
-            return null;
-        }
-        output[writer.used] = 0;
-        return output[0..writer.used];
-    }
-};
-
-fn field(array: []const u8) []const u8 {
-    return array[0 .. std.mem.indexOfScalar(u8, array, 0) orelse array.len];
-}
-
-fn copyField(destination: []u8, source: []const u8) void {
-    if (destination.len == 0) return;
-    const count = @min(source.len, destination.len - 1);
-    @memcpy(destination[0..count], source[0..count]);
-    destination[count] = 0;
-}
-
-const JsonWriter = struct {
-    output: []u8,
-    used: usize = 0,
-    failed: bool = false,
-
-    fn append(self: *JsonWriter, text: []const u8) void {
-        if (self.failed) return;
-        if (self.used >= self.output.len or text.len > self.output.len - self.used - 1) {
-            self.failed = true;
-            return;
-        }
-        @memcpy(self.output[self.used .. self.used + text.len], text);
-        self.used += text.len;
-    }
-
-    fn fieldPrefix(self: *JsonWriter, first: *bool, name: []const u8) void {
-        if (!first.*) self.append(",");
-        self.append("\"");
-        self.append(name);
-        self.append("\":");
-        first.* = false;
-    }
-
-    fn stringField(self: *JsonWriter, first: *bool, name: []const u8, value: []const u8) void {
-        self.fieldPrefix(first, name);
-        self.append("\"");
-        var escaped: [body_capacity * 6]u8 = undefined;
-        const length = MiniJson.escape(value, &escaped);
-        self.append(escaped[0..length]);
-        self.append("\"");
+    pub fn toInput(self: *const Notification) NotificationInput.Message {
+        return .{
+            .app = self.app,
+            .title = self.title,
+            .body = self.body,
+            .icon_path = self.icon_path,
+            .sender_pid = self.sender_pid,
+            .urgency = self.urgency,
+            .sticky = self.sticky,
+            .source = self.source,
+            .source_key = self.source_key,
+        };
     }
 };
 
@@ -141,6 +68,47 @@ pub const Store = struct {
         if (self.count < max_notifications) self.count += 1;
         self.items[self.head] = stored;
         return &self.items[self.head];
+    }
+
+    pub fn ingest(self: *Store, input: NotificationInput.Message, now_ms: u64) IngestResult {
+        if (input.source_key != 0) {
+            for (0..self.count) |index| {
+                const existing = self.atMutable(index).?;
+                if (!existing.read and existing.source == input.source and existing.source_key == input.source_key) {
+                    return .{ .notification = existing, .inserted = false };
+                }
+            }
+        }
+        return .{ .notification = self.pushAt(Notification.fromInput(input), now_ms), .inserted = true };
+    }
+
+    pub fn apply(self: *Store, event: NotificationInput.Event, now_ms: u64) bool {
+        return switch (event) {
+            .message => |message| self.ingest(message, now_ms).inserted,
+            .dismiss_source => |identity| self.markSourceRead(identity.source, identity.key) != 0,
+        };
+    }
+
+    pub fn markSourceRead(self: *Store, source: NotificationInput.Source, source_key: u64) usize {
+        if (source_key == 0) return 0;
+        var changed: usize = 0;
+        for (0..self.count) |index| {
+            const notification = self.atMutable(index).?;
+            if (!notification.read and notification.source == source and notification.source_key == source_key) {
+                notification.read = true;
+                changed += 1;
+            }
+        }
+        return changed;
+    }
+
+    pub fn sourceNotificationId(self: *const Store, source: NotificationInput.Source, source_key: u64) ?i64 {
+        if (source_key == 0) return null;
+        for (0..self.count) |index| {
+            const notification = self.at(index).?;
+            if (!notification.read and notification.source == source and notification.source_key == source_key) return notification.id;
+        }
+        return null;
     }
 
     pub fn markAllRead(self: *Store) usize {
@@ -227,20 +195,19 @@ pub const Store = struct {
     }
 };
 
-pub fn smokeCheck() bool {
-    const parsed = Notification.fromJson("{\"title\":\"Build\",\"body\":\"done\",\"app\":\"CI\",\"urgency\":\"HIGH\",\"sticky\":1}") orelse return false;
-    if (parsed.urgency != .high or !parsed.sticky) return false;
-    if (!std.mem.eql(u8, field(&parsed.title), "Build")) return false;
-    var output: [2048]u8 = undefined;
-    const json = parsed.toJson(&output, true) orelse return false;
-    if (!MiniJson.hasKey(json, "id") or !MiniJson.hasKey(json, "sticky")) return false;
+pub const IngestResult = struct { notification: *Notification, inserted: bool };
 
+pub fn smokeCheck() bool {
     var store = Store{};
-    const first = store.pushAt(parsed, 100);
+    var first_message = Notification{};
+    @memcpy(first_message.title[0..5], "Build");
+    @memcpy(first_message.body[0..4], "done");
+    const first = store.pushAt(first_message, 100);
     if (first.id != 1 or store.unreadCount() != 1) return false;
     if (store.activeDisplay(100 + display_ms + 1) == null) return false;
     if (store.markRead(first.id) != 1 or store.activeDisplay(101) != null) return false;
-    const transient = Notification.fromJson("{\"title\":\"transient\"}") orelse return false;
+    var transient = Notification{};
+    @memcpy(transient.title[0..9], "transient");
     const second = store.pushAt(transient, 200);
     if (second.id != 2 or store.find(1) == null) return false;
     if (store.markAllReadExcept(2) != 0 or store.unreadCount() != 1) return false;
@@ -254,4 +221,21 @@ pub fn smokeCheck() bool {
     if (store.activeDisplayWithFallback(301 + display_ms + 1, active_call_id).?.id != active_call_id) return false;
     if (store.markRead(active_call_id) != 1 or store.activeDisplayWithFallback(301 + display_ms + 1, active_call_id) != null) return false;
     return true;
+}
+
+test "notification input dedupe and source dismissal belong to the Feature store" {
+    var store = Store{};
+    const input = NotificationInput.Message{
+        .title = [_]u8{'x'} ++ @as([title_capacity - 1]u8, @splat(0)),
+        .source = .wechat_call,
+        .source_key = 77,
+        .sticky = true,
+    };
+    const first = store.ingest(input, 10);
+    const duplicate = store.ingest(input, 20);
+    try std.testing.expect(first.inserted);
+    try std.testing.expect(!duplicate.inserted);
+    try std.testing.expectEqual(first.notification.id, duplicate.notification.id);
+    try std.testing.expect(store.apply(.{ .dismiss_source = .{ .source = .wechat_call, .key = 77 } }, 30));
+    try std.testing.expectEqual(@as(usize, 0), store.unreadCount());
 }

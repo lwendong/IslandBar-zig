@@ -1,6 +1,6 @@
 const std = @import("std");
 const MiniJson = @import("MiniJson");
-const NotificationModule = @import("Notification");
+const NotificationInput = @import("NotificationInput");
 const Log = @import("Log");
 
 pub const pipe_name: []const u16 = &.{ 'I', 's', 'l', 'a', 'n', 'd', 'B', 'a', 'r', '.', 'N', 'o', 't', 'i', 'f', 'y' };
@@ -166,7 +166,7 @@ pub const NotificationServer = struct {
     running: bool = false,
     lock: CriticalSection = .{ .debug_info = null, .lock_count = 0, .recursion_count = 0, .owning_thread = null, .lock_semaphore = null, .spin_count = 0 },
     lock_ready: bool = false,
-    queue: [64]NotificationModule.Notification = @splat(.{}),
+    queue: [64]NotificationInput.Message = @splat(.{}),
     queue_count: usize = 0,
     received_count: i32 = 0,
     rejected_count: i32 = 0,
@@ -235,7 +235,7 @@ pub const NotificationServer = struct {
         return @atomicLoad(bool, &self.running, .acquire);
     }
 
-    pub fn take(self: *NotificationServer, output: *NotificationModule.Notification) bool {
+    pub fn take(self: *NotificationServer, output: *NotificationInput.Message) bool {
         if (!self.lock_ready) return false;
         EnterCriticalSection(&self.lock);
         defer LeaveCriticalSection(&self.lock);
@@ -254,7 +254,7 @@ pub const NotificationServer = struct {
         return @atomicLoad(i32, &self.rejected_count, .acquire);
     }
 
-    fn enqueue(self: *NotificationServer, notification: NotificationModule.Notification) void {
+    fn enqueue(self: *NotificationServer, notification: NotificationInput.Message) void {
         if (!self.lock_ready) return;
         EnterCriticalSection(&self.lock);
         defer LeaveCriticalSection(&self.lock);
@@ -298,7 +298,7 @@ pub const NotificationServer = struct {
 
             var request: [max_message_bytes]u8 = @splat(0);
             if (readFrame(pipe, &request)) {
-                if (NotificationModule.Notification.fromJson(&request)) |notification_value| {
+                if (NotificationInput.Message.fromJson(&request)) |notification_value| {
                     var notification = notification_value;
                     var client_pid: DWORD = 0;
                     if (GetNamedPipeClientProcessId(pipe, &client_pid) != 0) notification.sender_pid = client_pid;
@@ -329,7 +329,7 @@ fn threadEntry(context: ?*anyopaque) callconv(.winapi) DWORD {
 }
 
 /// Sends one notification and waits for the bar's acknowledgement.
-pub fn sendNotification(notification: *const NotificationModule.Notification, name: []const u16, response_output: ?[]u8, connect_timeout_ms: DWORD) bool {
+pub fn sendNotification(notification: *const NotificationInput.Message, name: []const u16, response_output: ?[]u8, connect_timeout_ms: DWORD) bool {
     var full_name: [256]u16 = @splat(0);
     const name_z = pipePath(name, &full_name) orelse return false;
     const waited = WaitNamedPipeW(name_z, connect_timeout_ms) != 0;
@@ -361,7 +361,7 @@ pub fn sendNotification(notification: *const NotificationModule.Notification, na
     var mode: DWORD = pipe_read_mode_message;
     _ = SetNamedPipeHandleState(pipe, &mode, null, null);
     var payload: [max_message_bytes]u8 = @splat(0);
-    const json = notification.toJson(&payload, false) orelse return false;
+    const json = notification.toJson(&payload) orelse return false;
     if (!writeFrame(pipe, json)) return false;
     var response: [1024]u8 = @splat(0);
     if (!readFrame(pipe, &response)) return false;
@@ -399,7 +399,7 @@ pub fn smokeCheck() bool {
     const client_name = asciiWideName(std.mem.span(client_name_z), &client_label);
     if (!std.mem.eql(u8, server_name, client_name)) return pipeSmokeFailure("client and server pipe paths differ");
 
-    var sent = NotificationModule.Notification{};
+    var sent = NotificationInput.Message{};
     @memcpy(sent.title[0..9], "self-test");
     @memcpy(sent.app[0..5], "smoke");
     var response: [128]u8 = @splat(0);
@@ -412,7 +412,7 @@ pub fn smokeCheck() bool {
         return pipeSmokeFailure(detail);
     }
 
-    var received = NotificationModule.Notification{};
+    var received = NotificationInput.Message{};
     if (!server.take(&received)) return pipeSmokeFailure("server queue was empty after acknowledgement");
     if (!std.mem.eql(u8, received.title[0..9], "self-test") or
         !std.mem.eql(u8, received.app[0..5], "smoke") or

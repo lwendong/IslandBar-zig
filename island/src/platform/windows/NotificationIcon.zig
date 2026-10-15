@@ -1,6 +1,6 @@
 const std = @import("std");
-const Notification = @import("Notification");
-const MusicSession = @import("MusicSession");
+const NotificationInput = @import("NotificationInput");
+const AppIcon = @import("AppIcon");
 const WicImage = @import("WicImage");
 const Log = @import("Log");
 
@@ -68,7 +68,7 @@ pub fn isPlainIconFilePath(source_arg: []const u16) bool {
 }
 
 /// Resolves an explicit UTF-8 icon field, or falls back to the sender's executable path.
-pub fn notificationIconSource(notification: *const Notification.Notification, output: []u16) bool {
+pub fn notificationIconSource(notification: *const NotificationInput.Message, output: []u16) bool {
     if (output.len == 0) return false;
     output[0] = 0;
     if (notification.icon_path[0] != 0) {
@@ -85,7 +85,7 @@ pub fn notificationIconSource(notification: *const Notification.Notification, ou
 }
 
 /// Loads a PNG or an executable-associated icon into caller-owned premultiplied BGRA storage.
-pub fn loadNotificationIconPixels(source_arg: []const u16, pixels: []u8, width: *i32, height: *i32) ?usize {
+pub fn loadNotificationIconPixels(source_arg: []const u16, pixels: []u8, width: *i32, height: *i32, fetch_icon: AppIcon.FetchPngFn) ?usize {
     const source = cWide(source_arg);
     if (source.len == 0 or pixels.len == 0 or !isPlainIconFilePath(source)) return null;
     const path: [*:0]const u16 = @ptrCast(source.ptr);
@@ -103,7 +103,7 @@ pub fn loadNotificationIconPixels(source_arg: []const u16, pixels: []u8, width: 
         if (ReadFile(file, &encoded, @intCast(bounded), &read, null) == 0) return null;
         encoded_size = read;
     } else {
-        encoded_size = MusicSession.fetchAppIconForTest(source, &encoded);
+        encoded_size = fetch_icon(source, &encoded);
     }
     if (encoded_size == 0) return null;
 
@@ -122,7 +122,7 @@ pub fn loadNotificationIconPixels(source_arg: []const u16, pixels: []u8, width: 
     return byte_count;
 }
 
-pub fn smokeCheck() bool {
+pub fn smokeCheck(fetch_icon: AppIcon.FetchPngFn) bool {
     const drive_png: []const u16 = &.{ 'C', ':', '\\', 'i', 'c', 'o', 'n', '.', 'P', 'N', 'G', 0 };
     const drive_script: []const u16 = &.{ 'C', ':', '\\', 't', 'o', 'o', 'l', '.', 'l', 'n', 'k', 0 };
     const uri: []const u16 = &.{ 's', 'h', 'e', 'l', 'l', ':', 'A', 'p', 'p', 's', 'F', 'o', 'l', 'd', 'e', 'r', 0 };
@@ -138,7 +138,7 @@ pub fn smokeCheck() bool {
         Log.logLine("self-test NotificationIcon: query path accepted");
         return false;
     }
-    const empty_notification = Notification.Notification{};
+    const empty_notification = NotificationInput.Message{};
     if (notificationIconSource(&empty_notification, &.{})) {
         Log.logLine("self-test NotificationIcon: empty sender produced source");
         return false;
@@ -160,7 +160,7 @@ pub fn smokeCheck() bool {
         return false;
     }
     var png: [16 * 1024]u8 = undefined;
-    const png_len = MusicSession.fetchAppIconForTest(executable[0..path_len], &png);
+    const png_len = fetch_icon(executable[0..path_len], &png);
     if (png_len == 0) {
         Log.logLine("self-test NotificationIcon: shell icon extraction returned no PNG");
         return false;
@@ -177,7 +177,7 @@ pub fn smokeCheck() bool {
     var icon_pixels: [32 * 32 * 4]u8 = undefined;
     var icon_width: i32 = 0;
     var icon_height: i32 = 0;
-    const pixel_count = loadNotificationIconPixels(executable[0..path_len], &icon_pixels, &icon_width, &icon_height) orelse {
+    const pixel_count = loadNotificationIconPixels(executable[0..path_len], &icon_pixels, &icon_width, &icon_height, fetch_icon) orelse {
         Log.logLine("self-test NotificationIcon: loading the executable icon returned no pixels");
         return false;
     };
@@ -192,8 +192,8 @@ comptime {
         var bytes: [16 * 1024]u8 = undefined;
         var width: i32 = 0;
         var height: i32 = 0;
-        const empty_notification = Notification.Notification{};
+        const empty_notification = NotificationInput.Message{};
         _ = notificationIconSource(&empty_notification, &path);
-        _ = loadNotificationIconPixels(&path, &bytes, &width, &height);
+        _ = loadNotificationIconPixels(&path, &bytes, &width, &height, AppIcon.unavailable);
     }
 }

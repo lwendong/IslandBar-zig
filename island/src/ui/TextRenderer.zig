@@ -1,73 +1,51 @@
 const std = @import("std");
 const Geometry = @import("Geometry");
-const CardLayout = @import("CardLayout");
-const TaskStripLayout = @import("TaskStripLayout");
-const StartApps = @import("StartApps");
+const SystemPanelPresentation = @import("SystemPanelPresentation");
+const CanvasModule = @import("Canvas");
+const Slider = @import("Slider");
+const BarControlLayout = @import("BarControlLayout");
+
 const Theme = @import("Theme");
-const Weather = @import("Weather");
+const StatusLineWeather = @import("StatusLineWeather");
 const WicImage = @import("WicImage");
 const GlassMaterial = @import("GlassMaterial");
 
 pub const task_button_count_max: usize = 32;
-pub const tray_icon_count_max: usize = 24;
 pub const system_tile_count_max: usize = 6;
-pub const sound_device_count_max: usize = 8;
-pub const sound_session_count_max: usize = 10;
-pub const sound_mix_row_count_max: usize = sound_session_count_max + 1;
-pub const sound_spatial_row_count: usize = 2;
+pub const feature_icon_cache_count: usize = 58;
+const scrolling_line_gutter_dip: f32 = 24;
+
+pub fn lineNeedsScrollForWidth(text_width_dip: f32, strip_width_dip: f32) bool {
+    return text_width_dip > strip_width_dip - scrolling_line_gutter_dip;
+}
+
+pub fn scrollingLineFadeDip(strip_width_dip: f32) f32 {
+    if (strip_width_dip <= 0) return 0;
+    return @min(20, strip_width_dip * 0.25);
+}
 
 pub const ClockStyle = enum(i32) { compact = 0, card = 1 };
 
 /// One application window button on the taskbar row.
 pub const TaskButton = struct {
+    window_id: u64 = 0,
+    process_id: u32 = 0,
+    process_created_at: u64 = 0,
     title: ?[*:0]const u16 = null,
     window: ?*anyopaque = null,
     icon: ?*anyopaque = null,
+    bounds: Geometry.RectF = .{},
+    icon_bounds: Geometry.RectF = .{},
+    title_bounds: Geometry.RectF = .{},
     active: bool = false,
     minimised: bool = false,
     fill: [4]f32 = .{ 0, 0, 0, 0 },
     hover_amount: f32 = 0,
+    appear_amount: f32 = 1,
 };
 
-pub const TrayIcon = struct {
-    name: [96]u16 = @splat(0),
-    png: ?[]const u8 = null,
-    promoted: bool = false,
-    uid: u32 = 0,
-    has_uid: bool = false,
-    has_guid: bool = false,
-    guid: extern struct { data1: u32, data2: u16, data3: u16, data4: [8]u8 } = .{
-        .data1 = 0,
-        .data2 = 0,
-        .data3 = 0,
-        .data4 = @splat(0),
-    },
-};
-
-pub const StartCardText = struct {
-    pins: ?[]const StartApps.StartApp = null,
-    pin_count: usize = 0,
-    pin_icons: ?[]const ?[]const u8 = null,
-    pin_icon_sizes: ?[]const usize = null,
-    pin_icon_revision: u64 = 0,
-    list: ?[]const StartApps.StartApp = null,
-    list_count: usize = 0,
-    picker_scroll_row: i32 = 0,
-    page: i32 = 0,
-    hovered_pin: i32 = -1,
-    hovered_picker_row: i32 = -1,
-    hovered_power_row: i32 = -1,
-    power_button_hovered: bool = false,
-    pin_washes: ?[]const f32 = null,
-    row_washes: ?[]const f32 = null,
-    power_washes: ?[]const f32 = null,
-    power_confirm_row: i32 = -1,
-    account_name: ?[*:0]const u16 = null,
-    avatar_png: ?[]const u8 = null,
-    avatar_png_size: usize = 0,
-};
-
-pub const MusicCardText = struct {
+/// Feature supplied content for the reusable media-card drawing primitive.
+pub const MediaCardContent = struct {
     title: []const u8 = &.{},
     artist: []const u8 = &.{},
     album: []const u8 = &.{},
@@ -82,6 +60,26 @@ pub const MusicCardText = struct {
     background_revision: u64 = 0,
     app_icon_png: []const u8 = &.{},
     app_icon_revision: u64 = 0,
+};
+
+/// Geometry is supplied by the owning Feature UI so draw and hit layout have
+/// one authority. TextRenderer only consumes these bounds.
+pub const MediaCardLayout = struct {
+    art_background: Geometry.RectF = .{},
+    app_row: Geometry.RectF = .{},
+    app_icon: Geometry.RectF = .{},
+    app_text: Geometry.RectF = .{},
+    app_icon_size: f32 = 0,
+    artwork: Geometry.RectF = .{},
+    title: Geometry.RectF = .{},
+    subtitle: Geometry.RectF = .{},
+    elapsed: Geometry.RectF = .{},
+    remaining: Geometry.RectF = .{},
+    progress: Geometry.RectF = .{},
+    controls: Geometry.RectF = .{},
+    previous: Geometry.RectF = .{},
+    play_pause: Geometry.RectF = .{},
+    next: Geometry.RectF = .{},
 };
 
 pub const LineRoll = struct {
@@ -112,79 +110,10 @@ pub const IndicatorIcon = enum(i32) {
     brightness = 18,
 };
 pub const SystemPanelIcon = IndicatorIcon;
+pub const SystemPanelTile = SystemPanelPresentation.Tile;
+pub const SystemPanelText = SystemPanelPresentation.View;
 
-pub const PanelAction = enum(i32) {
-    none = 0,
-    open_settings = 1,
-    toggle_mute = 2,
-    open_sound_page = 3,
-    projection_modes = 4,
-    toggle_radio = 5,
-    toggle_bluetooth = 6,
-    toggle_wifi = 7,
-    toggle_night_light = 8,
-    toggle_live_captions = 9,
-    cycle_theme = 10,
-    open_tray_page = 11,
-    open_start_page = 12,
-};
-
-pub const SystemPanelTile = struct {
-    label: ?[*:0]const u16 = null,
-    state_text: ?[*:0]const u16 = null,
-    icon: SystemPanelIcon = .network,
-    icon_value: i32 = 0,
-    on: bool = false,
-    chevron: bool = false,
-    action: PanelAction = .none,
-    uri: ?[*:0]const u16 = null,
-};
-
-pub const SystemPanelText = struct {
-    tiles: [system_tile_count_max]SystemPanelTile = @splat(.{}),
-    tile_count: usize = 0,
-    page_index: i32 = 0,
-    page_count: i32 = 1,
-    volume: f32 = 0,
-    muted: bool = false,
-    show_volume_percent: bool = false,
-    has_brightness: bool = false,
-    brightness: f32 = 0,
-    show_brightness_percent: bool = false,
-    slider_emphasis: [2]f32 = .{ 0, 0 },
-};
-
-pub const SoundPageText = struct {
-    pub const DeviceRow = struct {
-        name: ?[*:0]const u16 = null,
-        form_factor: i32 = 0,
-        is_default: bool = false,
-    };
-    pub const SpatialRow = struct {
-        label: ?[*:0]const u16 = null,
-        selected: bool = false,
-    };
-    pub const MixRow = struct {
-        label: ?[*:0]const u16 = null,
-        volume: f32 = 1,
-        muted: bool = false,
-        icon_png: ?[]const u8 = null,
-        icon_size: usize = 0,
-        icon_revision: u64 = 0,
-    };
-
-    title: ?[*:0]const u16 = null,
-    device_label: ?[*:0]const u16 = null,
-    spatial_label: ?[*:0]const u16 = null,
-    mixer_label: ?[*:0]const u16 = null,
-    footer: ?[*:0]const u16 = null,
-    devices: [sound_device_count_max]DeviceRow = @splat(.{}),
-    device_count: usize = 0,
-    spatial: [sound_spatial_row_count]SpatialRow = @splat(.{}),
-    mix: [sound_mix_row_count_max]MixRow = @splat(.{}),
-    mix_count: usize = 0,
-    scroll: f32 = 0,
-};
+pub const TextStyle = enum { small_body, card_title, card_caption, card_heading, card_body, icon, page_title, page_body, page_caption };
 
 pub const CallStripText = struct {
     seconds: i32 = 0,
@@ -282,15 +211,15 @@ pub const TextRenderer = struct {
     status_time_format: Handle = null,
     status_weather_format: Handle = null,
     pill_line_format: Handle = null,
-    notification_app_format: Handle = null,
-    notification_title_format: Handle = null,
-    notification_body_format: Handle = null,
+    card_caption_format: Handle = null,
+    card_heading_format: Handle = null,
+    card_body_format: Handle = null,
     panel_label_format: Handle = null,
     panel_icon_format: Handle = null,
-    sound_body_format: Handle = null,
-    sound_title_format: Handle = null,
-    start_row_format: Handle = null,
-    start_label_format: Handle = null,
+    small_body_format: Handle = null,
+    card_title_format: Handle = null,
+    page_body_format: Handle = null,
+    page_caption_format: Handle = null,
     music_title_format: Handle = null,
     music_subtitle_format: Handle = null,
     music_app_format: Handle = null,
@@ -299,26 +228,17 @@ pub const TextRenderer = struct {
     music_time_format: Handle = null,
     music_glyph_format: Handle = null,
     music_note_format: Handle = null,
-    start_icon_bitmaps: [18]Handle = @splat(null),
-    start_icon_contexts: [18]Handle = @splat(null),
-    start_icon_revisions: [18]u64 = @splat(0),
     music_artwork_cache: BitmapCache = .{},
     music_background_cache: BitmapCache = .{},
     music_app_icon_cache: BitmapCache = .{},
     call_icon_cache: BitmapCache = .{},
     last_png_bitmap_failure: []const u8 = "",
     last_png_bitmap_hresult: HResult = 0,
-    notification_icon_bitmap: Handle = null,
-    notification_icon_context: Handle = null,
-    notification_icon_revision: u64 = 0,
-    notification_icon_width: i32 = 0,
-    notification_icon_height: i32 = 0,
-    sound_icon_bitmaps: [sound_mix_row_count_max]Handle = @splat(null),
-    sound_icon_contexts: [sound_mix_row_count_max]Handle = @splat(null),
-    sound_icon_revisions: [sound_mix_row_count_max]u64 = @splat(0),
-    tray_icon_bitmaps: [tray_icon_count_max]Handle = @splat(null),
-    tray_icon_contexts: [tray_icon_count_max]Handle = @splat(null),
-    tray_icon_revisions: [tray_icon_count_max]u64 = @splat(0),
+    rgba_image_cache: BitmapCache = .{},
+    feature_icon_bitmaps: [feature_icon_cache_count]Handle = @splat(null),
+    feature_icon_contexts: [feature_icon_cache_count]Handle = @splat(null),
+    feature_icon_revisions: [feature_icon_cache_count]u64 = @splat(0),
+    feature_icon_fingerprints: [feature_icon_cache_count]u64 = @splat(0),
     grain_bitmap: Handle = null,
     grain_context: Handle = null,
     time_text: [16]u16 = @splat(0),
@@ -343,24 +263,24 @@ pub const TextRenderer = struct {
             !self.createFormat(font_family_text, 400, 11.5, &self.status_day_format) or
             !self.createFormat(font_family_text, 600, 13, &self.status_time_format) or
             !self.createFormat(font_family_text, 400, 11.5, &self.status_weather_format) or
-            !self.createCenteredSoundFormat(700, 11, &self.pill_line_format) or
+            !self.createCenteredPageFormat(700, 11, &self.pill_line_format) or
             !self.createFormat(font_family_text, 400, 11.5, &self.panel_label_format) or
             !self.createFormat(font_family_icons, 400, 18, &self.panel_icon_format) or
-            !self.createSoundFormat(400, 11.5, &self.sound_body_format) or
-            !self.createSoundFormat(600, 15, &self.sound_title_format) or
-            !self.createSoundFormat(400, 12, &self.start_row_format) or
-            !self.createCenteredSoundFormat(400, 10.5, &self.start_label_format) or
-            !self.createSoundFormat(600, 16, &self.music_title_format) or
-            !self.createSoundFormat(400, 12, &self.music_subtitle_format) or
-            !self.createSoundFormat(400, 11, &self.music_app_format) or
+            !self.createPageFormat(400, 11.5, &self.small_body_format) or
+            !self.createPageFormat(600, 15, &self.card_title_format) or
+            !self.createPageFormat(400, 12, &self.page_body_format) or
+            !self.createCenteredPageFormat(400, 10.5, &self.page_caption_format) or
+            !self.createPageFormat(600, 16, &self.music_title_format) or
+            !self.createPageFormat(400, 12, &self.music_subtitle_format) or
+            !self.createPageFormat(400, 11, &self.music_app_format) or
             !self.createTaskTitleFormat(&self.task_title_format) or
-            !self.createSoundFormat(400, 13, &self.task_active_title_format) or
-            !self.createSoundFormat(400, 10, &self.music_time_format) or
+            !self.createPageFormat(400, 13, &self.task_active_title_format) or
+            !self.createPageFormat(400, 10, &self.music_time_format) or
             !self.createCenteredIconFormat(16, &self.music_glyph_format) or
-            !self.createCenteredSoundFormat(400, 36, &self.music_note_format) or
-            !self.createNotificationFormat(400, 11, false, &self.notification_app_format) or
-            !self.createNotificationFormat(600, 15, false, &self.notification_title_format) or
-            !self.createNotificationFormat(400, 12, true, &self.notification_body_format))
+            !self.createCenteredPageFormat(400, 36, &self.music_note_format) or
+            !self.createTextStyleFormat(400, 11, false, &self.card_caption_format) or
+            !self.createTextStyleFormat(600, 15, false, &self.card_heading_format) or
+            !self.createTextStyleFormat(400, 12, true, &self.card_body_format))
         {
             self.shutdown();
             return false;
@@ -379,7 +299,7 @@ pub const TextRenderer = struct {
         return align_text(out.*.?, 2) >= 0 and align_paragraph(out.*.?, 1) >= 0 and no_wrap(out.*.?, 1) >= 0;
     }
 
-    fn createNotificationFormat(self: *TextRenderer, weight: u32, size: f32, wrap: bool, out: *Handle) bool {
+    fn createTextStyleFormat(self: *TextRenderer, weight: u32, size: f32, wrap: bool, out: *Handle) bool {
         const factory = self.factory orelse return false;
         const create = comMethod(*const fn (*anyopaque, [*:0]const u16, Handle, u32, u32, u32, f32, [*:0]const u16, *Handle) callconv(.winapi) HResult, factory, 15);
         if (create(factory, font_family_text, null, weight, 0, 5, size, locale_zh_cn, out) < 0 or out.* == null) return false;
@@ -390,7 +310,7 @@ pub const TextRenderer = struct {
             word_wrap(out.*.?, if (wrap) 0 else 1) >= 0;
     }
 
-    fn createSoundFormat(self: *TextRenderer, weight: u32, size: f32, out: *Handle) bool {
+    fn createPageFormat(self: *TextRenderer, weight: u32, size: f32, out: *Handle) bool {
         const factory = self.factory orelse return false;
         const create = comMethod(*const fn (*anyopaque, [*:0]const u16, Handle, u32, u32, u32, f32, [*:0]const u16, *Handle) callconv(.winapi) HResult, factory, 15);
         if (create(factory, font_family_text, null, weight, 0, 5, size, locale_zh_cn, out) < 0 or out.* == null) return false;
@@ -412,7 +332,7 @@ pub const TextRenderer = struct {
         return align_text(out.*.?, 2) >= 0 and align_paragraph(out.*.?, 1) >= 0;
     }
 
-    fn createCenteredSoundFormat(self: *TextRenderer, weight: u32, size: f32, out: *Handle) bool {
+    fn createCenteredPageFormat(self: *TextRenderer, weight: u32, size: f32, out: *Handle) bool {
         const factory = self.factory orelse return false;
         const create = comMethod(*const fn (*anyopaque, [*:0]const u16, Handle, u32, u32, u32, f32, [*:0]const u16, *Handle) callconv(.winapi) HResult, factory, 15);
         if (create(factory, font_family_text, null, weight, 0, 5, size, locale_zh_cn, out) < 0 or out.* == null) return false;
@@ -432,7 +352,9 @@ pub const TextRenderer = struct {
         return align_text(out.*.?, 2) >= 0 and align_paragraph(out.*.?, 1) >= 0 and no_wrap(out.*.?, 1) >= 0;
     }
 
-    pub fn shutdown(self: *TextRenderer) void {
+    /// Releases only D2D/device-dependent bitmaps while keeping DirectWrite
+    /// formats and the current business/page snapshots alive for device rebuild.
+    pub fn invalidateDeviceResources(self: *TextRenderer) void {
         releaseCom(&self.music_artwork_cache.bitmap);
         releaseCom(&self.music_background_cache.bitmap);
         releaseCom(&self.music_app_icon_cache.bitmap);
@@ -441,31 +363,30 @@ pub const TextRenderer = struct {
         self.music_background_cache = .{};
         self.music_app_icon_cache = .{};
         self.call_icon_cache = .{};
-        for (&self.sound_icon_bitmaps) |*bitmap| releaseCom(bitmap);
-        self.sound_icon_contexts = @splat(null);
-        self.sound_icon_revisions = @splat(0);
-        for (&self.tray_icon_bitmaps) |*bitmap| releaseCom(bitmap);
-        self.tray_icon_contexts = @splat(null);
-        self.tray_icon_revisions = @splat(0);
+        for (&self.feature_icon_bitmaps) |*bitmap| releaseCom(bitmap);
+        self.feature_icon_contexts = @splat(null);
+        self.feature_icon_revisions = @splat(0);
+        self.feature_icon_fingerprints = @splat(0);
         releaseCom(&self.grain_bitmap);
         self.grain_context = null;
-        for (&self.start_icon_bitmaps) |*bitmap| releaseCom(bitmap);
-        self.start_icon_contexts = @splat(null);
-        self.start_icon_revisions = @splat(0);
-        releaseCom(&self.notification_icon_bitmap);
-        self.notification_icon_context = null;
-        self.notification_icon_revision = 0;
-        self.notification_icon_width = 0;
-        self.notification_icon_height = 0;
-        releaseCom(&self.notification_body_format);
-        releaseCom(&self.notification_title_format);
-        releaseCom(&self.notification_app_format);
+
+        releaseCom(&self.rgba_image_cache.bitmap);
+        self.rgba_image_cache = .{};
+        self.last_png_bitmap_failure = "";
+        self.last_png_bitmap_hresult = 0;
+    }
+
+    pub fn shutdown(self: *TextRenderer) void {
+        self.invalidateDeviceResources();
+        releaseCom(&self.card_body_format);
+        releaseCom(&self.card_heading_format);
+        releaseCom(&self.card_caption_format);
         releaseCom(&self.panel_icon_format);
         releaseCom(&self.panel_label_format);
-        releaseCom(&self.sound_title_format);
-        releaseCom(&self.sound_body_format);
-        releaseCom(&self.start_label_format);
-        releaseCom(&self.start_row_format);
+        releaseCom(&self.card_title_format);
+        releaseCom(&self.small_body_format);
+        releaseCom(&self.page_caption_format);
+        releaseCom(&self.page_body_format);
         releaseCom(&self.music_glyph_format);
         releaseCom(&self.music_note_format);
         releaseCom(&self.music_time_format);
@@ -511,8 +432,8 @@ pub const TextRenderer = struct {
         GlassMaterial.drawGrain(ops, shape, theme.grain);
     }
 
-    /// Paints the common card material used by the system, music, tray, Start,
-    /// sound, and notification cards.
+    /// Paints the common card material used by system, music, tray, Start,
+    /// feature, and notification cards.
     pub fn drawCardSurface(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, opacity_arg: f32) void {
         const context = context_arg orelse return;
         if (opacity_arg <= 0.001 or Geometry.width(box.rect) <= 0 or Geometry.height(box.rect) <= 0) return;
@@ -540,6 +461,119 @@ pub const TextRenderer = struct {
         strokeRounded(context, .{ .rect = toD2DRect(box.rect), .radius_x = box.radius_x, .radius_y = box.radius_y }, asD2D(Theme.themeInk(theme.card_edge * opacity_arg)), 1);
         GlassMaterial.drawSurfaceLighting(ops, shape, theme, opacity_arg);
         GlassMaterial.drawGrain(ops, shape, theme.grain * opacity_arg);
+    }
+
+    /// Generic feature-page text primitive; page-specific layout stays with its Feature UI.
+    pub fn drawLabel(self: *TextRenderer, context_arg: Handle, style: TextStyle, text: []const u16, bounds: Geometry.RectF, color: Theme.Color) bool {
+        const context = context_arg orelse return false;
+        const format = switch (style) {
+            .small_body => self.small_body_format,
+            .card_title => self.card_title_format,
+            .card_caption => self.card_caption_format,
+            .card_heading => self.card_heading_format,
+            .card_body => self.card_body_format,
+            .icon => self.panel_icon_format orelse self.page_caption_format,
+            .page_title => self.status_time_format,
+            .page_body => self.page_body_format,
+            .page_caption => self.page_caption_format,
+        } orelse return false;
+        drawTextWithColor(context, format, text, asD2D(color), toD2DRect(bounds));
+        return true;
+    }
+
+    /// Converts UTF-8 into a bounded temporary UTF-16 buffer, then uses the same generic text styles.
+    pub fn drawUtf8Label(self: *TextRenderer, context: Handle, style: TextStyle, text: []const u8, bounds: Geometry.RectF, color: Theme.Color) bool {
+        var wide: [1024]u16 = @splat(0);
+        const count = utf8ToWide(text, &wide);
+        return self.drawLabel(context, style, wide[0..count], bounds, color);
+    }
+
+    pub fn fillRoundedRect(self: *TextRenderer, context_arg: Handle, bounds: Geometry.RectF, radius_x: f32, radius_y: f32, color: Theme.Color) void {
+        _ = self;
+        if (context_arg) |context| fillRounded(context, .{ .rect = toD2DRect(bounds), .radius_x = radius_x, .radius_y = radius_y }, asD2D(color));
+    }
+
+    pub fn strokeRoundedRect(self: *TextRenderer, context_arg: Handle, bounds: Geometry.RectF, radius_x: f32, radius_y: f32, color: Theme.Color, thickness: f32) void {
+        _ = self;
+        if (context_arg) |context| strokeRounded(context, .{ .rect = toD2DRect(bounds), .radius_x = radius_x, .radius_y = radius_y }, asD2D(color), thickness);
+    }
+
+    pub fn drawFeatureLine(self: *TextRenderer, context_arg: Handle, from: [2]f32, to: [2]f32, color: Theme.Color, thickness: f32) void {
+        _ = self;
+        if (context_arg) |context| drawLine(context, .{ .x = from[0], .y = from[1] }, .{ .x = to[0], .y = to[1] }, asD2D(color), thickness);
+    }
+
+    pub fn pushClip(self: *TextRenderer, context_arg: Handle, clip: Geometry.RectF) void {
+        _ = self;
+        if (context_arg) |context| {
+            const rect = toD2DRect(clip);
+            const push = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, context, 45);
+            push(context, &rect, 0);
+        }
+    }
+
+    pub fn popClip(self: *TextRenderer, context_arg: Handle) void {
+        _ = self;
+        if (context_arg) |context| {
+            const pop = comMethod(*const fn (*anyopaque) callconv(.winapi) void, context, 46);
+            pop(context);
+        }
+    }
+
+    pub fn drawSlider(self: *TextRenderer, context: Handle, bounds: Geometry.RectF, view: Slider.ViewModel, opacity: f32) bool {
+        _ = self;
+        if (context == null) return false;
+        const canvas = CanvasModule.Canvas{ .context = context, .fill_rounded_rect_fn = canvasFillRoundedRect, .fill_ellipse_fn = canvasFillEllipse };
+        Slider.paint(&canvas, bounds, view, opacity);
+        return true;
+    }
+
+    pub fn drawPngIcon(self: *TextRenderer, context_arg: Handle, cache_index: usize, png: []const u8, revision: u64, bounds: Geometry.RectF, opacity: f32) bool {
+        const context = context_arg orelse return false;
+        const bitmap = self.featureIconBitmap(context, cache_index, png, revision) orelse return false;
+        const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context, 26);
+        const destination = toD2DRect(bounds);
+        draw(context, bitmap, &destination, opacity, 3, null);
+        return true;
+    }
+
+    /// Draws caller-owned premultiplied BGRA pixels through a generic, device-bound image cache.
+    pub fn drawRgbaImage(self: *TextRenderer, context_arg: Handle, pixels: ?[]const u8, width: i32, height: i32, revision: u64, bounds: Geometry.RectF, opacity: f32) bool {
+        const context = context_arg orelse return false;
+        const bitmap = self.rawPixelBitmap(context, &self.rgba_image_cache, pixels, width, height, revision) orelse return pixels == null;
+        const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context, 26);
+        const destination = toD2DRect(bounds);
+        draw(context, bitmap, &destination, std.math.clamp(opacity, 0, 1), 3, null);
+        return true;
+    }
+
+    pub fn clearPngIcon(self: *TextRenderer, cache_index: usize) void {
+        if (cache_index >= self.feature_icon_bitmaps.len) return;
+        releaseCom(&self.feature_icon_bitmaps[cache_index]);
+        self.feature_icon_contexts[cache_index] = null;
+        self.feature_icon_revisions[cache_index] = 0;
+        self.feature_icon_fingerprints[cache_index] = 0;
+    }
+
+    fn featureIconBitmap(self: *TextRenderer, context: *anyopaque, index: usize, png: []const u8, revision: u64) ?*anyopaque {
+        if (index >= self.feature_icon_bitmaps.len or png.len == 0) return null;
+        const fingerprint = imageFingerprint(png);
+        if (self.feature_icon_contexts[index] == context and self.feature_icon_bitmaps[index] != null and self.feature_icon_revisions[index] == revision and self.feature_icon_fingerprints[index] == fingerprint) return self.feature_icon_bitmaps[index];
+        if (self.feature_icon_contexts[index] != context) releaseCom(&self.feature_icon_bitmaps[index]);
+        var decoded = WicImage.DecodedImage{};
+        if (!WicImage.decodeImage(png, &decoded, .icon) or decoded.width <= 0 or decoded.height <= 0) return self.feature_icon_bitmaps[index];
+        const properties = D2DBitmapProperties1{ .pixel_format = .{ .format = 87, .alpha_mode = 1 }, .dpi_x = 96, .dpi_y = 96, .options = 0, .color_context = null };
+        const bitmap_size = D2DSizeU{ .width = @intCast(decoded.width), .height = @intCast(decoded.height) };
+        const stride: u32 = @intCast(@as(u64, @intCast(decoded.width)) * 4);
+        var bitmap: Handle = null;
+        const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, u32, *const D2DBitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
+        if (create(context, bitmap_size, decoded.pixels, stride, &properties, &bitmap) < 0 or bitmap == null) return self.feature_icon_bitmaps[index];
+        releaseCom(&self.feature_icon_bitmaps[index]);
+        self.feature_icon_bitmaps[index] = bitmap;
+        self.feature_icon_contexts[index] = context;
+        self.feature_icon_revisions[index] = revision;
+        self.feature_icon_fingerprints[index] = fingerprint;
+        return bitmap;
     }
 
     pub fn drawClock(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, style: ClockStyle, opacity_arg: f32) bool {
@@ -600,7 +634,7 @@ pub const TextRenderer = struct {
 
     /// Draws the pill's one-line track or lyric label. Long lines scroll in a
     /// seamless loop; changing lyric lines roll upward through a one-line clip.
-    pub fn drawTrackLine(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, text: []const u8, scroll_dip: f32, opacity_arg: f32, roll_progress_arg: f32, previous: []const u8, previous_scroll_dip: f32) bool {
+    pub fn drawScrollingLine(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, text: []const u8, scroll_dip: f32, opacity_arg: f32, roll_progress_arg: f32, previous: []const u8, previous_scroll_dip: f32) bool {
         const context = context_arg orelse return false;
         if (self.factory == null or text.len == 0) return false;
         const format = self.pill_line_format orelse self.status_time_format orelse return false;
@@ -636,7 +670,7 @@ pub const TextRenderer = struct {
         const color = asD2D(ink);
         if (create_brush(context, &color, null, &brush) < 0 or brush == null) return false;
         defer releaseCom(&brush);
-        var end_fade = createLyricFadeBrush(context, box.rect, opacity);
+        var end_fade = createScrollingLineFadeBrush(context, box.rect, opacity);
         defer releaseCom(&end_fade);
 
         const text_width = measureTextWidth(self.factory.?, format, wide[0..count]);
@@ -646,21 +680,21 @@ pub const TextRenderer = struct {
         if (progress < 1 and previous.len != 0) {
             var old_wide: [512]u16 = @splat(0);
             const old_count = utf8ToWide(previous, &old_wide);
-            if (old_count != 0) drawTrackLineRun(context, format, brush.?, old_wide[0..old_count], measureTextWidth(self.factory.?, format, old_wide[0..old_count]), width, box.rect.left, mid_y - leaving_y, previous_scroll_dip, line_height, box.rect, end_fade);
+            if (old_count != 0) drawScrollingLineRun(context, format, brush.?, old_wide[0..old_count], measureTextWidth(self.factory.?, format, old_wide[0..old_count]), width, box.rect.left, mid_y - leaving_y, previous_scroll_dip, line_height, box.rect, end_fade);
         }
-        drawTrackLineRun(context, format, brush.?, wide[0..count], text_width, width, box.rect.left, mid_y + entering_y, scroll_dip, line_height, box.rect, end_fade);
+        drawScrollingLineRun(context, format, brush.?, wide[0..count], text_width, width, box.rect.left, mid_y + entering_y, scroll_dip, line_height, box.rect, end_fade);
         return true;
     }
 
     /// Uses the drawing format itself to decide whether the line needs the
     /// marquee, keeping the frame loop and renderer on the same threshold.
-    pub fn trackLineNeedsScroll(self: *TextRenderer, text: []const u8, strip_width: f32) bool {
+    pub fn scrollingLineNeedsScroll(self: *TextRenderer, text: []const u8, strip_width: f32) bool {
         if (self.factory == null or text.len == 0) return false;
         const format = self.pill_line_format orelse self.status_time_format orelse return false;
         var wide: [512]u16 = @splat(0);
         const count = utf8ToWide(text, &wide);
         if (count == 0) return false;
-        return CardLayout.lyricNeedsScroll(measureTextWidth(self.factory.?, format, wide[0..count]), strip_width);
+        return lineNeedsScrollForWidth(measureTextWidth(self.factory.?, format, wide[0..count]), strip_width);
     }
 
     /// Paints the live music level behind the lyric as a filled, continuously
@@ -736,14 +770,12 @@ pub const TextRenderer = struct {
         fill(context, path.?, brush.?, null);
     }
 
-    /// Draws the system quick-settings surface, including its tile page, volume and optional brightness
-    /// sliders, and page controls. The layout and hit testing share CardLayout.systemPanelFor.
+    /// Draws a value-only SystemPanel presentation using the feature-provided shared layout.
     pub fn drawSystemPanel(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, panel: *const SystemPanelText, opacity_arg: f32) bool {
         if (context == null or self.panel_label_format == null or self.panel_icon_format == null) return false;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         if (opacity <= 0.01) return true;
-        const slider_count: i32 = if (panel.has_brightness) 2 else 1;
-        const layout = CardLayout.systemPanelFor(box, @intCast(panel.tile_count), slider_count, panel.page_count > 1, panel.page_index, panel.page_count);
+        const layout = panel.layout;
         const theme = Theme.currentTheme();
         self.drawCardSurface(context.?, box, opacity);
 
@@ -752,14 +784,14 @@ pub const TextRenderer = struct {
             const rect = layout.tiles[index];
             const rounded = D2DRoundedRect{ .rect = .{ .left = rect.left, .top = rect.top, .right = rect.right, .bottom = rect.bottom }, .radius_x = 8, .radius_y = 8 };
             if (tile.on) {
-                const accent = theme.accent;
+                const accent = theme.tokens.accent;
                 fillRounded(context.?, rounded, .{ .r = accent.r, .g = accent.g, .b = accent.b, .a = accent.a * 0.97 * opacity });
             } else {
                 fillRounded(context.?, rounded, asD2D(Theme.themeInk(0.055 * opacity)));
                 strokeRounded(context.?, rounded, asD2D(Theme.themeInk(0.13 * opacity)), 1);
             }
 
-            const glyph = [_]u16{ indicatorGlyph(tile.icon, tile.icon_value), 0 };
+            const glyph = [_]u16{ indicatorGlyph(@fromBackingInt(@intCast(tile.icon)), tile.icon_value), 0 };
             if (glyph[0] != 0) drawTextWithColor(context.?, self.panel_icon_format.?, &glyph, asD2D(Theme.themeInk(0.98 * opacity)), toD2DRect(layout.tile_icons[index]));
 
             if (tile.chevron) {
@@ -788,7 +820,7 @@ pub const TextRenderer = struct {
             const track_rect = D2DRoundedRect{ .rect = .{ .left = track.left, .top = center_y - 2, .right = track.right, .bottom = center_y + 2 }, .radius_x = 2, .radius_y = 2 };
             fillRounded(context.?, track_rect, asD2D(Theme.themeInk(0.22 * opacity)));
             const handle_x = track.left + (track.right - track.left) * fraction;
-            if (handle_x > track.left) fillRounded(context.?, .{ .rect = .{ .left = track.left, .top = center_y - 2, .right = handle_x, .bottom = center_y + 2 }, .radius_x = 2, .radius_y = 2 }, asD2D(theme.accent));
+            if (handle_x > track.left) fillRounded(context.?, .{ .rect = .{ .left = track.left, .top = center_y - 2, .right = handle_x, .bottom = center_y + 2 }, .radius_x = 2, .radius_y = 2 }, asD2D(theme.tokens.accent));
             fillEllipse(context.?, .{ .point = .{ .x = handle_x, .y = center_y }, .radius_x = 6.5 + 2 * std.math.clamp(panel.slider_emphasis[index], 0, 1), .radius_y = 6.5 + 2 * std.math.clamp(panel.slider_emphasis[index], 0, 1) }, asD2D(Theme.themeInk(0.96 * opacity)));
             if ((if (brightness) panel.show_brightness_percent else panel.show_volume_percent)) {
                 var percentage: [8]u16 = @splat(0);
@@ -815,369 +847,17 @@ pub const TextRenderer = struct {
         return true;
     }
 
-    /// Draw the in-island sound output page, sharing its geometry with hit testing.
-    pub fn drawSoundPage(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, page: *const SoundPageText, opacity_arg: f32) bool {
-        if (context == null or self.sound_body_format == null or self.sound_title_format == null or self.panel_icon_format == null) return false;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01) return true;
-
-        const layout = CardLayout.soundPageFor(box, @intCast(page.device_count), @intCast(page.mix_count), page.scroll);
-        const theme = Theme.currentTheme();
-        self.drawCardSurface(context.?, box, opacity);
-        const ink = asD2D(Theme.themeInk(opacity));
-        const muted_ink = asD2D(Theme.themeInk(0.80 * opacity));
-        const faint_ink = asD2D(Theme.themeInk(0.10 * opacity));
-        const rule_y_top = layout.header_rule.top;
-        const rule_y_bottom = layout.footer_rule.top;
-        drawLine(context.?, .{ .x = layout.header_rule.left, .y = rule_y_top }, .{ .x = layout.header_rule.right, .y = rule_y_top }, faint_ink, 1);
-        drawLine(context.?, .{ .x = layout.footer_rule.left, .y = rule_y_bottom }, .{ .x = layout.footer_rule.right, .y = rule_y_bottom }, faint_ink, 1);
-
-        const back = [_]u16{ 0xE72B, 0 };
-        drawTextWithColor(context.?, self.panel_icon_format.?, &back, ink, toD2DRect(layout.back_button));
-        if (page.title) |title| drawTextWithColor(context.?, self.sound_title_format.?, std.mem.span(title), ink, toD2DRect(layout.title));
-        if (page.footer) |footer| {
-            const footer_box = Geometry.RectF{ .left = layout.footer.left + CardLayout.sound_indent_dip, .top = layout.footer.top, .right = layout.footer.right - CardLayout.sound_indent_dip, .bottom = layout.footer.bottom };
-            drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(footer), muted_ink, toD2DRect(footer_box));
-        }
-
-        const clip = toD2DRect(layout.viewport);
-        const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, context.?, 45);
-        const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, context.?, 46);
-        push_clip(context.?, &clip, 0);
-
-        if (page.device_label) |label| drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(label), muted_ink, toD2DRect(layout.device_label));
-        for (0..@intCast(layout.device_count)) |index| {
-            const row = page.devices[index];
-            const row_box = layout.device_rows[index];
-            if (row.is_default) {
-                fillRounded(context.?, .{ .rect = toD2DRect(row_box), .radius_x = 0, .radius_y = 0 }, asD2D(Theme.themeInk(0.07 * opacity)));
-                const accent = theme.accent;
-                fillRounded(context.?, .{ .rect = toD2DRect(layout.device_marks[index]), .radius_x = 1.5, .radius_y = 1.5 }, .{ .r = accent.r, .g = accent.g, .b = accent.b, .a = 0.95 * opacity });
-            }
-            const glyph: u16 = switch (row.form_factor) {
-                3, 5 => indicatorGlyph(.headphones, 0),
-                4, 6, 8, 10 => indicatorGlyph(.display_audio, 0),
-                else => indicatorGlyph(.volume, 1),
-            };
-            drawTextWithColor(context.?, self.panel_icon_format.?, &.{ glyph, 0 }, ink, toD2DRect(layout.device_icons[index]));
-            if (row.name) |name| drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(name), if (row.is_default) ink else muted_ink, toD2DRect(layout.device_labels[index]));
-        }
-
-        if (page.spatial_label) |label| drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(label), muted_ink, toD2DRect(layout.spatial_label));
-        for (0..page.spatial.len) |index| {
-            const row = page.spatial[index];
-            if (row.label) |label| {
-                if (row.selected) {
-                    const accent = theme.accent;
-                    fillRounded(context.?, .{ .rect = toD2DRect(layout.spatial_marks[index]), .radius_x = 1.5, .radius_y = 1.5 }, .{ .r = accent.r, .g = accent.g, .b = accent.b, .a = 0.95 * opacity });
-                }
-                drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(label), if (row.selected) ink else muted_ink, toD2DRect(layout.spatial_labels[index]));
-            }
-        }
-
-        if (page.mixer_label) |label| drawTextWithColor(context.?, self.sound_body_format.?, std.mem.span(label), muted_ink, toD2DRect(layout.mixer_label));
-        const gear = [_]u16{ indicatorGlyph(.settings, 0), 0 };
-        drawTextWithColor(context.?, self.panel_icon_format.?, &gear, muted_ink, toD2DRect(layout.mixer_gear));
-        for (0..@intCast(layout.session_count)) |index| {
-            const row = page.mix[index];
-            const icon_box = layout.mixer_icons[index];
-            if (self.soundIconBitmap(context.?, index, row.icon_png, row.icon_size, row.icon_revision)) |bitmap| {
-                const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context.?, 26);
-                const destination = toD2DRect(icon_box);
-                draw(context.?, bitmap, &destination, opacity, 3, null);
-            } else {
-                const glyph = if (index == 0) indicatorGlyph(.volume, 1) else indicatorGlyph(.settings, 0);
-                drawTextWithColor(context.?, self.panel_icon_format.?, &.{ glyph, 0 }, ink, toD2DRect(icon_box));
-            }
-            const track = layout.mixer_tracks[index];
-            const center_y = (track.top + track.bottom) * 0.5;
-            const fraction = if (row.muted) @as(f32, 0) else std.math.clamp(row.volume, 0, 1);
-            const handle_x = track.left + (track.right - track.left) * fraction;
-            fillRounded(context.?, .{ .rect = .{ .left = track.left, .top = center_y - 2, .right = track.right, .bottom = center_y + 2 }, .radius_x = 2, .radius_y = 2 }, asD2D(Theme.themeInk(0.22 * opacity)));
-            if (fraction > 0.001) {
-                const accent = theme.accent;
-                fillRounded(context.?, .{ .rect = .{ .left = track.left, .top = center_y - 2, .right = handle_x, .bottom = center_y + 2 }, .radius_x = 2, .radius_y = 2 }, .{ .r = accent.r, .g = accent.g, .b = accent.b, .a = 0.95 * opacity });
-            }
-            fillEllipse(context.?, .{ .point = .{ .x = handle_x, .y = center_y }, .radius_x = 6, .radius_y = 6 }, asD2D(Theme.themeInk(0.96 * opacity)));
-        }
-        pop_clip(context.?);
-
-        fillRounded(context.?, .{ .rect = toD2DRect(layout.scroll_track), .radius_x = 1.5, .radius_y = 1.5 }, asD2D(Theme.themeInk(0.10 * opacity)));
-        fillRounded(context.?, .{ .rect = toD2DRect(layout.scroll_thumb), .radius_x = 1.5, .radius_y = 1.5 }, asD2D(Theme.themeInk(0.34 * opacity)));
-        return true;
-    }
-
-    fn soundIconBitmap(self: *TextRenderer, context: *anyopaque, index: usize, png: ?[]const u8, size: usize, revision: u64) ?*anyopaque {
-        if (index >= self.sound_icon_bitmaps.len) return null;
-        const data = png orelse {
-            releaseCom(&self.sound_icon_bitmaps[index]);
-            self.sound_icon_contexts[index] = context;
-            self.sound_icon_revisions[index] = 0;
-            return null;
-        };
-        if (size == 0 or size > data.len) return null;
-        if (self.sound_icon_contexts[index] == context and self.sound_icon_bitmaps[index] != null and self.sound_icon_revisions[index] == revision) return self.sound_icon_bitmaps[index];
-        if (self.sound_icon_contexts[index] != context) releaseCom(&self.sound_icon_bitmaps[index]);
-        var decoded = WicImage.DecodedImage{};
-        if (!WicImage.decodeImage(data[0..size], &decoded, .icon) or decoded.width <= 0 or decoded.height <= 0) return self.sound_icon_bitmaps[index];
-        const properties = D2DBitmapProperties1{ .pixel_format = .{ .format = 87, .alpha_mode = 1 }, .dpi_x = 96, .dpi_y = 96, .options = 0, .color_context = null };
-        const bitmap_size = D2DSizeU{ .width = @intCast(decoded.width), .height = @intCast(decoded.height) };
-        const stride: u32 = @intCast(@as(u64, @intCast(decoded.width)) * 4);
-        var bitmap: Handle = null;
-        const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, u32, *const D2DBitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
-        if (create(context, bitmap_size, decoded.pixels, stride, &properties, &bitmap) < 0 or bitmap == null) return self.sound_icon_bitmaps[index];
-        releaseCom(&self.sound_icon_bitmaps[index]);
-        self.sound_icon_bitmaps[index] = bitmap;
-        self.sound_icon_contexts[index] = context;
-        self.sound_icon_revisions[index] = revision;
-        return bitmap;
-    }
-
-    /// Draw the tray page and scale cached notification-area snapshots to fit their cells.
-    pub fn drawTrayPage(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, title: ?[*:0]const u16, icons: []const TrayIcon, revision: u64, hovered_index: i32, opacity_arg: f32) bool {
-        if (context == null) return false;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01) return true;
-        const count = @min(icons.len, tray_icon_count_max);
-        const layout = CardLayout.trayPageFor(box, @intCast(count));
-        self.drawCardSurface(context.?, box, opacity);
-        if (title) |value| drawTextWithColor(context.?, self.status_time_format orelse self.sound_body_format orelse return false, std.mem.span(value), asD2D(Theme.themeInk(0.88 * opacity)), toD2DRect(layout.title));
-        for (0..count) |index| {
-            const cell = layout.cells[index];
-            const rounded = D2DRoundedRect{ .rect = toD2DRect(cell), .radius_x = 10, .radius_y = 10 };
-            fillRounded(context.?, rounded, .{ .r = 0, .g = 0, .b = 0, .a = 0.28 * opacity });
-            strokeRounded(context.?, rounded, asD2D(Theme.themeInk(0.13 * opacity)), 1);
-            if (hovered_index == @as(i32, @intCast(index))) fillRounded(context.?, rounded, asD2D(Theme.themeInk(0.16 * opacity)));
-            const icon = icons[index];
-            const bitmap = self.trayIconBitmap(context.?, index, icon.png, revision) orelse continue;
-            const cell_size = cell.right - cell.left;
-            const side = std.math.clamp(cell_size * 0.5, 22, 34);
-            const centre_x = (cell.left + cell.right) * 0.5;
-            const centre_y = (cell.top + cell.bottom) * 0.5;
-            const destination = D2DRectF{ .left = centre_x - side * 0.5, .top = centre_y - side * 0.5, .right = centre_x + side * 0.5, .bottom = centre_y + side * 0.5 };
-            const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context.?, 26);
-            draw(context.?, bitmap, &destination, opacity, 3, null);
-        }
-        return true;
-    }
-
-    /// Draw the bar-owned context menu above its tray page.
-    pub fn drawTrayMenu(self: *TextRenderer, context_arg: Handle, rows: []const Geometry.RectF, labels: []const ?[*:0]const u16, hovered_row: i32, opacity_arg: f32) void {
-        const context = context_arg orelse return;
-        const count = @min(rows.len, labels.len);
-        if (count == 0) return;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01) return;
-
-        const pad = CardLayout.tray_menu_pad_dip;
-        const box = D2DRoundedRect{
-            .rect = .{
-                .left = rows[0].left - pad,
-                .top = rows[0].top - pad,
-                .right = rows[count - 1].right + pad,
-                .bottom = rows[count - 1].bottom + pad,
-            },
-            .radius_x = 10,
-            .radius_y = 10,
-        };
-        fillRounded(context, box, .{ .r = 0.13, .g = 0.13, .b = 0.16, .a = 0.99 * opacity });
-        strokeRounded(context, box, .{ .r = 1, .g = 1, .b = 1, .a = 0.12 * opacity }, 1);
-
-        const format = self.start_row_format orelse return;
-        for (rows[0..count], 0..) |row, index| {
-            const rounded = D2DRoundedRect{ .rect = toD2DRect(row), .radius_x = 6, .radius_y = 6 };
-            if (hovered_row == @as(i32, @intCast(index))) {
-                fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * opacity });
-            }
-            if (labels[index]) |label| {
-                const text = std.mem.span(label);
-                if (text.len != 0) drawTextWithColor(context, format, text, .{
-                    .r = 0.90,
-                    .g = 0.91,
-                    .b = 0.95,
-                    .a = 0.94 * opacity,
-                }, .{ .left = row.left + 8, .top = row.top, .right = row.right - 8, .bottom = row.bottom });
-            }
-        }
-    }
-
-    fn trayIconBitmap(self: *TextRenderer, context: *anyopaque, index: usize, png_arg: ?[]const u8, revision: u64) ?*anyopaque {
-        if (index >= self.tray_icon_bitmaps.len) return null;
-        const png = png_arg orelse {
-            releaseCom(&self.tray_icon_bitmaps[index]);
-            self.tray_icon_contexts[index] = context;
-            self.tray_icon_revisions[index] = 0;
-            return null;
-        };
-        if (png.len == 0) return null;
-        if (self.tray_icon_contexts[index] == context and self.tray_icon_bitmaps[index] != null and self.tray_icon_revisions[index] == revision) return self.tray_icon_bitmaps[index];
-        if (self.tray_icon_contexts[index] != context) releaseCom(&self.tray_icon_bitmaps[index]);
-        var decoded = WicImage.DecodedImage{};
-        if (!WicImage.decodeImage(png, &decoded, .icon) or decoded.width <= 0 or decoded.height <= 0) return self.tray_icon_bitmaps[index];
-        const properties = D2DBitmapProperties1{ .pixel_format = .{ .format = 87, .alpha_mode = 1 }, .dpi_x = 96, .dpi_y = 96, .options = 0, .color_context = null };
-        const bitmap_size = D2DSizeU{ .width = @intCast(decoded.width), .height = @intCast(decoded.height) };
-        const stride: u32 = @intCast(@as(u64, @intCast(decoded.width)) * 4);
-        var bitmap: Handle = null;
-        const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, u32, *const D2DBitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
-        if (create(context, bitmap_size, decoded.pixels, stride, &properties, &bitmap) < 0 or bitmap == null) return self.tray_icon_bitmaps[index];
-        releaseCom(&self.tray_icon_bitmaps[index]);
-        self.tray_icon_bitmaps[index] = bitmap;
-        self.tray_icon_contexts[index] = context;
-        self.tray_icon_revisions[index] = revision;
-        return bitmap;
-    }
-
-    /// Draw the pinned-app, all-apps, and power views of the Start card.
-    pub fn drawStartPage(self: *TextRenderer, context: Handle, card: Geometry.RoundedBox, text: *const StartCardText, opacity_arg: f32) bool {
-        if (context == null or self.start_row_format == null or self.start_label_format == null) return false;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01) return true;
-        const layout = CardLayout.startPageFor(card);
-        if (!layout.valid) return false;
-        self.drawCardSurface(context.?, card, opacity);
-        const ink = asD2D(Theme.themeInk(0.92 * opacity));
-        const dim = asD2D(Theme.themeInk(0.50 * opacity));
-        const line = asD2D(Theme.themeInk(0.07 * opacity));
-        const warm = D2DColor{ .r = 1, .g = 0.72, .b = 0.35, .a = 0.95 * opacity };
-
-        if (text.page == 2) {
-            const labels = [_][]const u16{
-                &.{ 0x9501, 0x5B9A }, &.{ 0x7761, 0x7720 }, &.{ 0x6CE8, 0x9500 },
-                &.{ 0x91CD, 0x542F }, &.{ 0x5173, 0x673A },
-            };
-            const armed_label = &[_]u16{ 0x518D, 0x70B9, 0x4E00, 0x6B21, 0x786E, 0x8BA4 };
-            for (0..5) |index| {
-                const row = CardLayout.startPowerRowFor(card, @intCast(index));
-                const amount = if (text.power_washes) |washes| if (index < washes.len) washes[index] else 0 else if (text.hovered_power_row == @as(i32, @intCast(index))) @as(f32, 1) else 0;
-                if (amount > 0.01) fillRounded(context.?, .{ .rect = toD2DRect(row), .radius_x = 8, .radius_y = 8 }, asD2D(Theme.themeInk(0.12 * amount * opacity)));
-                const label = if (text.power_confirm_row == @as(i32, @intCast(index))) armed_label[0..] else labels[index];
-                drawTextWithColor(context.?, self.start_row_format.?, label, if (text.power_confirm_row == @as(i32, @intCast(index))) warm else ink, .{ .left = row.left + 10, .top = row.top, .right = row.right - 10, .bottom = row.bottom });
-            }
-        } else if (text.page == 1) {
-            const list = text.list orelse &.{};
-            const list_count: i32 = @intCast(@min(text.list_count, list.len));
-            const rows_on_screen: i32 = @intFromFloat(@max(0, (layout.grid.bottom - layout.grid.top) / CardLayout.start_row_height));
-            const clip = toD2DRect(layout.grid);
-            const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, context.?, 45);
-            const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, context.?, 46);
-            push_clip(context.?, &clip, 0);
-            for (0..@intCast(rows_on_screen + 1)) |visible| {
-                const index = text.picker_scroll_row + @as(i32, @intCast(visible));
-                if (index < 0 or index >= list_count) break;
-                const row = CardLayout.startPickerRowFor(card, @intCast(visible));
-                if (row.bottom > layout.grid.bottom) break;
-                const hovered = text.hovered_picker_row == index;
-                const amount = if (text.row_washes) |washes| if (@as(usize, @intCast(index)) < washes.len) washes[@intCast(index)] else 0 else if (hovered) @as(f32, 1) else 0;
-                if (amount > 0.01) fillRounded(context.?, .{ .rect = toD2DRect(row), .radius_x = 8, .radius_y = 8 }, asD2D(Theme.themeInk(0.12 * amount * opacity)));
-                const app = list[@intCast(index)];
-                drawTextWithColor(context.?, self.start_row_format.?, std.mem.sliceTo(&app.name, 0), ink, .{ .left = row.left + 10, .top = row.top, .right = row.right - 84, .bottom = row.bottom });
-                var pinned = false;
-                if (text.pins) |pins| {
-                    for (pins[0..@min(text.pin_count, pins.len)]) |pin| {
-                        if (wideEqualIgnoreCase(std.mem.sliceTo(&pin.target, 0), std.mem.sliceTo(&app.target, 0))) {
-                            pinned = true;
-                            break;
-                        }
-                    }
-                }
-                if (pinned) drawTextWithColor(context.?, self.start_label_format.?, &.{ 0x5DF2, 0x56FA, 0 }, dim, .{ .left = row.right - 74, .top = row.top, .right = row.right - 10, .bottom = row.bottom });
-            }
-            pop_clip(context.?);
-            if (list_count > 0) {
-                const grid_height = layout.grid.bottom - layout.grid.top;
-                const visible_rows = @as(f32, @floatFromInt(rows_on_screen + 1));
-                const visible_fraction = visible_rows / @as(f32, @floatFromInt(list_count));
-                const bar_height = @max(24, grid_height * visible_fraction);
-                const max_row = @as(f32, @floatFromInt(@max(1, list_count - (rows_on_screen + 1))));
-                const travelled = layout.grid.top + (grid_height - bar_height) * (@as(f32, @floatFromInt(@max(0, text.picker_scroll_row))) / max_row);
-                fillRounded(context.?, .{ .rect = .{ .left = layout.grid.right + 6, .top = travelled, .right = layout.grid.right + 9, .bottom = travelled + bar_height }, .radius_x = 1.5, .radius_y = 1.5 }, line);
-            }
-        } else {
-            const pins = text.pins orelse &.{};
-            const shown = @min(@min(text.pin_count, pins.len), 18);
-            for (0..shown) |index| {
-                const cell = CardLayout.startPinCellFor(layout, @intCast(index));
-                const amount = if (text.pin_washes) |washes| if (index < washes.len) washes[index] else 0 else if (text.hovered_pin == @as(i32, @intCast(index))) @as(f32, 1) else 0;
-                if (amount > 0.01) fillRounded(context.?, .{ .rect = toD2DRect(cell), .radius_x = 10, .radius_y = 10 }, asD2D(Theme.themeInk(0.12 * amount * opacity)));
-                const png = if (text.pin_icons) |icons| if (index < icons.len) icons[index] else null else null;
-                const icon_size = if (text.pin_icon_sizes) |sizes| if (index < sizes.len) sizes[index] else 0 else 0;
-                const icon_box = Geometry.RectF{ .left = (cell.left + cell.right) * 0.5 - 14, .right = (cell.left + cell.right) * 0.5 + 14, .top = cell.top + 5, .bottom = cell.top + 33 };
-                if (self.startIconBitmap(context.?, index, png, icon_size, text.pin_icon_revision)) |bitmap| {
-                    const destination = toD2DRect(icon_box);
-                    const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context.?, 26);
-                    draw(context.?, bitmap, &destination, opacity, 3, null);
-                } else {
-                    fillRounded(context.?, .{ .rect = toD2DRect(icon_box), .radius_x = 6, .radius_y = 6 }, line);
-                }
-                drawTextWithColor(context.?, self.start_label_format.?, std.mem.sliceTo(&pins[index].name, 0), ink, .{ .left = cell.left + 2, .top = icon_box.bottom + 1, .right = cell.right - 2, .bottom = cell.bottom });
-            }
-            if (shown == 0) {
-                const centre_x = (layout.grid.left + layout.grid.right) * 0.5;
-                const centre_y = (layout.grid.top + layout.grid.bottom) * 0.5;
-                drawTextWithColor(context.?, self.start_label_format.?, &.{ '+', 0 }, warm, .{ .left = centre_x - 16, .top = centre_y - 36, .right = centre_x + 16, .bottom = centre_y - 4 });
-                drawTextWithColor(context.?, self.start_label_format.?, &.{ 0x70B9, 0x8FD9, 0x91CC, 0x6DFB, 0x52A0, 0x5E94, 0x7528, 0 }, dim, .{ .left = layout.grid.left, .top = centre_y, .right = layout.grid.right, .bottom = centre_y + 28 });
-            }
-        }
-
-        drawLine(context.?, .{ .x = layout.footer.left, .y = layout.footer.top }, .{ .x = layout.footer.right, .y = layout.footer.top }, line, 1);
-        if (text.page == 1) {
-            var footer: [96]u16 = @splat(0);
-            var ascii: [64]u8 = undefined;
-            const rendered = std.fmt.bufPrint(&ascii, "All apps: {d} · wheel to scroll", .{text.list_count}) catch &.{};
-            for (rendered, 0..) |byte, index| footer[index] = byte;
-            drawTextWithColor(context.?, self.start_row_format.?, &footer, dim, .{ .left = layout.footer.left, .top = layout.footer.top, .right = layout.power_button.left - 8, .bottom = layout.footer.bottom });
-        } else if (text.account_name) |account| {
-            drawTextWithColor(context.?, self.start_row_format.?, std.mem.span(account), ink, .{ .left = layout.avatar.right + 10, .top = layout.footer.top, .right = layout.power_button.left - 10, .bottom = layout.footer.bottom });
-        }
-
-        const power_amount = if (text.power_washes) |washes| if (washes.len > 0) washes[0] else 0 else if (text.power_button_hovered or text.page == 2) @as(f32, 1) else 0;
-        if (power_amount > 0.01) fillRounded(context.?, .{ .rect = toD2DRect(layout.power_button), .radius_x = 8, .radius_y = 8 }, asD2D(Theme.themeInk(0.12 * power_amount * opacity)));
-        if (text.page == 1) {
-            drawTextWithColor(context.?, self.start_label_format.?, &.{ 0x00D7, 0 }, ink, toD2DRect(layout.power_button));
-        } else {
-            drawTextWithColor(context.?, self.panel_icon_format orelse self.start_label_format.?, &.{ 0xE7E8, 0 }, dim, toD2DRect(layout.power_button));
-        }
-        return true;
-    }
-
-    fn startIconBitmap(self: *TextRenderer, context: *anyopaque, index: usize, png_arg: ?[]const u8, size: usize, revision: u64) ?*anyopaque {
-        if (index >= self.start_icon_bitmaps.len) return null;
-        const png = png_arg orelse {
-            releaseCom(&self.start_icon_bitmaps[index]);
-            self.start_icon_contexts[index] = context;
-            self.start_icon_revisions[index] = 0;
-            return null;
-        };
-        if (size == 0 or size > png.len) return null;
-        if (self.start_icon_contexts[index] == context and self.start_icon_bitmaps[index] != null and self.start_icon_revisions[index] == revision) return self.start_icon_bitmaps[index];
-        if (self.start_icon_contexts[index] != context) releaseCom(&self.start_icon_bitmaps[index]);
-        var decoded = WicImage.DecodedImage{};
-        if (!WicImage.decodeImage(png[0..size], &decoded, .icon) or decoded.width <= 0 or decoded.height <= 0) return self.start_icon_bitmaps[index];
-        const properties = D2DBitmapProperties1{ .pixel_format = .{ .format = 87, .alpha_mode = 1 }, .dpi_x = 96, .dpi_y = 96, .options = 0, .color_context = null };
-        const bitmap_size = D2DSizeU{ .width = @intCast(decoded.width), .height = @intCast(decoded.height) };
-        const stride: u32 = @intCast(@as(u64, @intCast(decoded.width)) * 4);
-        var bitmap: Handle = null;
-        const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, u32, *const D2DBitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
-        if (create(context, bitmap_size, decoded.pixels, stride, &properties, &bitmap) < 0 or bitmap == null) return self.start_icon_bitmaps[index];
-        releaseCom(&self.start_icon_bitmaps[index]);
-        self.start_icon_bitmaps[index] = bitmap;
-        self.start_icon_contexts[index] = context;
-        self.start_icon_revisions[index] = revision;
-        return bitmap;
-    }
-
     /// Draws the sender, title, and wrapped body of a notification into the
     /// expanded island surface. All incoming text is UTF-8 from the named pipe.
     /// Draws the expanded media card from the same layout used by its hit tests.
     /// Artwork and the player icon are cached per D2D context and revision so a
     /// redraw does not upload the same image to the GPU on every frame.
-    pub fn drawMusicCard(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, card: *const MusicCardText, opacity_arg: f32) bool {
+    pub fn drawMediaCard(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, layout: MediaCardLayout, card: *const MediaCardContent, opacity_arg: f32) bool {
         const context = context_arg orelse return false;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         if (opacity <= 0.01 or (card.title.len == 0 and card.artist.len == 0)) return true;
         self.last_png_bitmap_failure = "";
         self.last_png_bitmap_hresult = 0;
-        const layout = CardLayout.musicCardFor(box);
         const theme = Theme.currentTheme();
         self.drawCardSurface(context, box, opacity);
 
@@ -1203,7 +883,7 @@ pub const TextRenderer = struct {
 
         const primary = D2DColor{ .r = 1, .g = 1, .b = 1, .a = opacity };
         const secondary = D2DColor{ .r = 0.90, .g = 0.92, .b = 0.96, .a = 0.88 * opacity };
-        const accent = D2DColor{ .r = theme.accent.r, .g = theme.accent.g, .b = theme.accent.b, .a = opacity };
+        const accent = D2DColor{ .r = theme.tokens.accent.r, .g = theme.tokens.accent.g, .b = theme.tokens.accent.b, .a = opacity };
 
         {
             var artwork_mask = pushRoundedMask(context, .{ .rect = layout.artwork, .radius_x = 8, .radius_y = 8 });
@@ -1296,48 +976,25 @@ pub const TextRenderer = struct {
         return true;
     }
 
-    /// Draws the application-window row beside the island. Geometry, hover
-    /// widths, and title placement use the same TaskStripLayout functions as
-    /// the hit test so a button cannot be painted somewhere it cannot be
-    /// clicked.
+    /// Draws the application-window row from the Feature UI's presented
+    /// geometry. TextRenderer does not calculate taskbar layout.
     pub fn drawTaskIcons(
         self: *TextRenderer,
         context_arg: Handle,
-        island: Geometry.RoundedBox,
         buttons: []const TaskButton,
-        hovered_index: i32,
         opacity_arg: f32,
-        appear_amounts: []const f32,
-        card_left_dip: f32,
-        card_width_dip: f32,
     ) bool {
         const context = context_arg orelse return false;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
-        const count = @min(buttons.len, TaskStripLayout.max_task_icons);
+        const count = buttons.len;
         if (count == 0 or opacity <= 0.01) return true;
-
-        var amounts: [TaskStripLayout.max_task_icons]f32 = @splat(0);
-        for (buttons[0..count], 0..) |button, index| {
-            amounts[index] = std.math.clamp(button.hover_amount, 0, 1);
-        }
 
         const measured_line_height = self.metrics().secondary_line_height;
         const line_height = if (measured_line_height > 1) measured_line_height else 16;
-        for (buttons[0..count], 0..) |button, index| {
-            const appear = if (index < appear_amounts.len)
-                std.math.clamp(appear_amounts[index], 0, 1)
-            else
-                1;
+        for (buttons[0..count]) |button| {
+            const appear = std.math.clamp(button.appear_amount, 0, 1);
             if (appear <= 0.01) continue;
-
-            const box = TaskStripLayout.taskIconButtonAtAmounts(
-                island,
-                index,
-                count,
-                &amounts,
-                card_left_dip,
-                card_width_dip,
-            );
+            const box = button.bounds;
             if (box.right <= box.left or box.bottom <= box.top) continue;
             const rounded = D2DRoundedRect{
                 .rect = toD2DRect(box),
@@ -1360,7 +1017,7 @@ pub const TextRenderer = struct {
             }
 
             if (button.icon) |icon| {
-                var icon_box = TaskStripLayout.taskIconInBox(box);
+                var icon_box = button.icon_bounds;
                 if (appear < 0.999) {
                     const centre_x = (icon_box.left + icon_box.right) * 0.5;
                     const centre_y = (icon_box.top + icon_box.bottom) * 0.5;
@@ -1377,19 +1034,10 @@ pub const TextRenderer = struct {
                 drawMusicBitmap(context, icon, icon_box, opacity * appear * (if (button.minimised) @as(f32, 0.55) else 1), 1);
             }
 
-            if (@as(i32, @intCast(index)) != hovered_index) continue;
             const title = button.title orelse continue;
             if (title[0] == 0) continue;
-            const title_box = TaskStripLayout.taskTitleAtAmounts(
-                island,
-                index,
-                count,
-                &amounts,
-                hovered_index,
-                card_left_dip,
-                card_width_dip,
-            );
-            if (title_box.right - title_box.left < TaskStripLayout.task_title_min_width_dip) continue;
+            const title_box = button.title_bounds;
+            if (title_box.right - title_box.left < 1 or title_box.bottom <= title_box.top) continue;
             const color =
                 if (button.active)
                     D2DColor{ .r = 1, .g = 1, .b = 1, .a = 0.98 * opacity * appear }
@@ -1454,133 +1102,6 @@ pub const TextRenderer = struct {
         draw(context, bitmap, &target, opacity, interpolation, null, null);
     }
 
-    pub fn drawNotification(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, app: []const u8, title_arg: []const u8, body_arg: []const u8, icon_pixels: ?[]const u8, icon_width: i32, icon_height: i32, icon_revision: u64, opacity_arg: f32) bool {
-        if (context == null or self.notification_title_format == null or box.rect.right <= box.rect.left or box.rect.bottom <= box.rect.top) return false;
-        const opacity = std.math.clamp(opacity_arg, 0, 1);
-        if (opacity <= 0.01) return true;
-
-        var app_wide: [256]u16 = @splat(0);
-        var title_wide: [512]u16 = @splat(0);
-        var body_wide: [1024]u16 = @splat(0);
-        const app_len = utf8ToWide(app, &app_wide);
-        const title_len = utf8ToWide(title_arg, &title_wide);
-        const body_len = utf8ToWide(body_arg, &body_wide);
-        if (app_len == 0 and title_len == 0 and body_len == 0) return true;
-
-        self.drawCardSurface(context.?, box, opacity);
-        const create_brush = comMethod(*const fn (*anyopaque, *const D2DColor, Handle, *Handle) callconv(.winapi) HResult, context.?, 8);
-        const rect = box.rect;
-
-        const card_height = rect.bottom - rect.top;
-        var clock_box = box;
-        clock_box.rect.bottom = rect.top + card_height * 0.46;
-        if (!self.drawClock(context, clock_box, .card, opacity)) return false;
-        const divider_y = rect.top + card_height * 0.49;
-        const divider = Theme.currentTheme().accent;
-        drawLine(context.?, .{ .x = rect.left + 18, .y = divider_y }, .{ .x = rect.right - 18, .y = divider_y }, .{
-            .r = divider.r,
-            .g = divider.g,
-            .b = divider.b,
-            .a = divider.a * 0.45 * opacity,
-        }, 1);
-
-        const ink = Theme.themeInk(opacity);
-        const text_color = D2DColor{ .r = ink.r, .g = ink.g, .b = ink.b, .a = ink.a };
-        var text_brush: Handle = null;
-        if (create_brush(context.?, &text_color, null, &text_brush) < 0 or text_brush == null) return false;
-        defer releaseCom(&text_brush);
-
-        const left = rect.left + 18;
-        const icon_bitmap = self.notificationIconBitmap(context.?, icon_pixels, icon_width, icon_height, icon_revision);
-        const show_icon = icon_bitmap != null and (app_len != 0 or title_len != 0);
-        const text_left = left + if (show_icon) @as(f32, 26) else 0;
-        const right = @max(text_left, rect.right - 18);
-        var y = rect.top + card_height * 0.52;
-        if (app_len != 0) {
-            if (show_icon) {
-                if (icon_bitmap) |bitmap| self.drawNotificationIcon(context.?, bitmap, left, y + 1, opacity);
-            }
-            drawText(context.?, self.notification_app_format.?, app_wide[0 .. app_len + 1], text_brush.?, .{
-                .left = text_left,
-                .top = y,
-                .right = right,
-                .bottom = y + 22,
-            });
-            y += 28;
-        }
-        if (title_len != 0) {
-            if (app_len == 0) {
-                if (show_icon) {
-                    if (icon_bitmap) |bitmap| self.drawNotificationIcon(context.?, bitmap, left, y + 3, opacity);
-                }
-            }
-            drawText(context.?, self.notification_title_format.?, title_wide[0 .. title_len + 1], text_brush.?, .{
-                .left = text_left,
-                .top = y,
-                .right = right,
-                .bottom = y + 28,
-            });
-            y += 34;
-        }
-        if (body_len != 0 and rect.bottom - 14 > y) {
-            drawText(context.?, self.notification_body_format.?, body_wide[0 .. body_len + 1], text_brush.?, .{
-                .left = text_left,
-                .top = y,
-                .right = right,
-                .bottom = rect.bottom - 14,
-            });
-        }
-        return true;
-    }
-
-    fn notificationIconBitmap(self: *TextRenderer, context: *anyopaque, pixels_arg: ?[]const u8, width: i32, height: i32, revision: u64) ?*anyopaque {
-        const pixels = pixels_arg orelse {
-            if (self.notification_icon_context != context) releaseCom(&self.notification_icon_bitmap);
-            self.notification_icon_context = context;
-            self.notification_icon_revision = 0;
-            return null;
-        };
-        if (width <= 0 or height <= 0) return null;
-        const pixel_count = @mulWithOverflow(@as(usize, @intCast(width)), @as(usize, @intCast(height)));
-        if (pixel_count[1] != 0) return null;
-        const byte_count = @mulWithOverflow(pixel_count[0], 4);
-        if (byte_count[1] != 0 or pixels.len < byte_count[0]) return null;
-        if (self.notification_icon_context == context and self.notification_icon_bitmap != null and
-            self.notification_icon_revision == revision and self.notification_icon_width == width and
-            self.notification_icon_height == height)
-        {
-            return self.notification_icon_bitmap;
-        }
-        if (self.notification_icon_context != context) releaseCom(&self.notification_icon_bitmap);
-
-        const properties = D2DBitmapProperties1{
-            .pixel_format = .{ .format = 87, .alpha_mode = 1 },
-            .dpi_x = 96,
-            .dpi_y = 96,
-            .options = 0,
-            .color_context = null,
-        };
-        var bitmap: Handle = null;
-        const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, u32, *const D2DBitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
-        const size = D2DSizeU{ .width = @intCast(width), .height = @intCast(height) };
-        const stride: u32 = @intCast(@as(u64, @intCast(width)) * 4);
-        if (create(context, size, pixels.ptr, stride, &properties, &bitmap) < 0 or bitmap == null) return self.notification_icon_bitmap;
-        releaseCom(&self.notification_icon_bitmap);
-        self.notification_icon_bitmap = bitmap;
-        self.notification_icon_context = context;
-        self.notification_icon_revision = revision;
-        self.notification_icon_width = width;
-        self.notification_icon_height = height;
-        return self.notification_icon_bitmap;
-    }
-
-    fn drawNotificationIcon(_: *TextRenderer, context: *anyopaque, bitmap: *anyopaque, left: f32, top: f32, opacity: f32) void {
-        const side: f32 = 18;
-        const destination = D2DRectF{ .left = left, .top = top, .right = left + side, .bottom = top + side };
-        const draw = comMethod(*const fn (*anyopaque, *anyopaque, *const D2DRectF, f32, i32, ?*const D2DRectF) callconv(.winapi) void, context, 26);
-        draw(context, bitmap, &destination, opacity, 3, null);
-    }
-
     pub fn drawCallStrip(self: *TextRenderer, context_arg: Handle, box: Geometry.RoundedBox, call: CallStripText, opacity_arg: f32) void {
         const context = context_arg orelse return;
         const height = box.rect.bottom - box.rect.top;
@@ -1608,7 +1129,7 @@ pub const TextRenderer = struct {
 
         var timer: [16]u16 = @splat(0);
         callTimerText(call.seconds, &timer);
-        if (self.sound_body_format) |format| {
+        if (self.small_body_format) |format| {
             const set_paragraph = comMethod(*const fn (*anyopaque, i32) callconv(.winapi) HResult, format, 4);
             _ = set_paragraph(format, 1);
             defer _ = set_paragraph(format, 1);
@@ -1656,9 +1177,8 @@ pub const TextRenderer = struct {
 
     fn rawPixelBitmap(_: *TextRenderer, context: *anyopaque, cache: *BitmapCache, pixels_arg: ?[]const u8, width: i32, height: i32, revision: u64) ?*anyopaque {
         const pixels = pixels_arg orelse {
-            if (cache.context != context) releaseCom(&cache.bitmap);
-            cache.context = context;
-            cache.revision = 0;
+            releaseCom(&cache.bitmap);
+            cache.* = .{ .context = context };
             return null;
         };
         if (width <= 0 or height <= 0) return null;
@@ -1666,7 +1186,7 @@ pub const TextRenderer = struct {
         if (pixel_count[1] != 0) return null;
         const byte_count = @mulWithOverflow(pixel_count[0], 4);
         if (byte_count[1] != 0 or pixels.len < byte_count[0]) return null;
-        if (cache.context == context and cache.bitmap != null and cache.revision == revision) return cache.bitmap;
+        if (cache.context == context and cache.bitmap != null and cache.revision == revision and cache.width == width and cache.height == height) return cache.bitmap;
         if (cache.context != context) releaseCom(&cache.bitmap);
 
         const properties = D2DBitmapProperties1{ .pixel_format = .{ .format = 87, .alpha_mode = 1 }, .dpi_x = 96, .dpi_y = 96, .options = 0, .color_context = null };
@@ -1678,18 +1198,22 @@ pub const TextRenderer = struct {
             releaseCom(&cache.bitmap);
             cache.context = context;
             cache.revision = revision;
+            cache.width = width;
+            cache.height = height;
             return null;
         }
         releaseCom(&cache.bitmap);
         cache.bitmap = bitmap;
         cache.context = context;
         cache.revision = revision;
+        cache.width = width;
+        cache.height = height;
         return bitmap;
     }
 
     /// Draws the pill's complete clock/weather status run. Text measurement and drawing use the same
     /// ordered pieces and spacing, matching the C++ renderer's centered layout.
-    pub fn drawStatusLine(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, opacity_arg: f32, sky: []const u16, temperature: []const u16, weather_code: i32) bool {
+    pub fn drawStatusLine(self: *TextRenderer, context: Handle, box: Geometry.RoundedBox, opacity_arg: f32, weather: StatusLineWeather.View) bool {
         if (context == null or self.factory == null or box.rect.right <= box.rect.left) return false;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         if (opacity <= 0.01) return true;
@@ -1697,7 +1221,7 @@ pub const TextRenderer = struct {
         if (self.status_weekday_format == null or self.status_day_format == null or
             self.status_time_format == null or self.status_weather_format == null) return false;
 
-        const run = buildStatusRun(self, zSlice(&self.weekday_text), zSlice(&self.day_text), zSlice(&self.time_text), sky, temperature, weather_code);
+        const run = buildStatusRun(self, zSlice(&self.weekday_text), zSlice(&self.day_text), zSlice(&self.time_text), weather);
         const pieces = run.pieces;
         const count = run.count;
         if (count == 0) return true;
@@ -1711,7 +1235,7 @@ pub const TextRenderer = struct {
         const mark_center_y = (rect.top + rect.bottom) * 0.5 - 1;
         for (pieces[0..count]) |piece| {
             if (piece.mark != .none) {
-                drawSkyMark(context.?, .{ .left = x, .top = mark_center_y - piece.width * 0.5, .right = x + piece.width, .bottom = mark_center_y + piece.width * 0.5 }, piece.mark, opacity);
+                drawStatusMark(context.?, .{ .left = x, .top = mark_center_y - piece.width * 0.5, .right = x + piece.width, .bottom = mark_center_y + piece.width * 0.5 }, piece.mark, opacity);
             } else if (piece.text.len != 0 and piece.format != null) {
                 const color = D2DColor{ .r = piece.luminance, .g = piece.luminance, .b = piece.luminance, .a = opacity };
                 var brush: Handle = null;
@@ -1726,11 +1250,11 @@ pub const TextRenderer = struct {
         return true;
     }
 
-    /// Draws the Windows mark on the Start control, sharing TaskStripLayout's
+    /// Draws the Windows mark on the Start control, sharing BarControlLayout's
     /// button rectangle with the hit test.
     pub fn drawStartButton(_: *TextRenderer, context_arg: Handle, island: Geometry.RoundedBox, wash_arg: f32, open: bool, opacity_arg: f32) void {
         const context = context_arg orelse return;
-        const box = TaskStripLayout.startButtonFor(island);
+        const box = BarControlLayout.startButtonFor(island);
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
@@ -1738,7 +1262,7 @@ pub const TextRenderer = struct {
             const rounded = D2DRoundedRect{ .rect = toD2DRect(box), .radius_x = (box.bottom - box.top) * 0.5, .radius_y = (box.bottom - box.top) * 0.5 };
             fillRounded(context, rounded, .{ .r = 1, .g = 1, .b = 1, .a = 0.16 * opacity * wash });
         }
-        const side = TaskStripLayout.start_icon_dip;
+        const side = BarControlLayout.start_icon_dip;
         const centre_x = (box.left + box.right) * 0.5;
         const centre_y = (box.top + box.bottom) * 0.5;
         const left = centre_x - side * 0.5;
@@ -1759,7 +1283,7 @@ pub const TextRenderer = struct {
     /// will open or close the panel.
     pub fn drawSystemButton(_: *TextRenderer, context_arg: Handle, island: Geometry.RoundedBox, wash_arg: f32, open: bool, opacity_arg: f32) void {
         const context = context_arg orelse return;
-        const box = TaskStripLayout.systemButtonFor(island);
+        const box = BarControlLayout.systemButtonFor(island);
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
@@ -1781,7 +1305,7 @@ pub const TextRenderer = struct {
     /// Draws the three-dot tray control at the end of the application row.
     pub fn drawTrayButton(_: *TextRenderer, context_arg: Handle, island: Geometry.RoundedBox, wash_arg: f32, open: bool, opacity_arg: f32) void {
         const context = context_arg orelse return;
-        const box = TaskStripLayout.trayButtonFor(island);
+        const box = BarControlLayout.trayButtonFor(island);
         if (box.right <= box.left or opacity_arg <= 0.01) return;
         const opacity = std.math.clamp(opacity_arg, 0, 1);
         const wash = if (open) @as(f32, 1) else std.math.clamp(wash_arg, 0, 1);
@@ -1800,10 +1324,10 @@ pub const TextRenderer = struct {
     }
 
     /// Measures the exact run used by drawStatusLine, for parity checks and width constraints.
-    pub fn measureStatusLine(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, sky: []const u16, temperature: []const u16, weather_code: i32) f32 {
+    pub fn measureStatusLine(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, weather: StatusLineWeather.View) f32 {
         if (self.factory == null or self.status_weekday_format == null or self.status_day_format == null or
             self.status_time_format == null or self.status_weather_format == null) return 0;
-        return buildStatusRun(self, weekday, day, time, sky, temperature, weather_code).width;
+        return buildStatusRun(self, weekday, day, time, weather).width;
     }
 
     pub fn metrics(self: *TextRenderer) TextMetrics {
@@ -1933,7 +1457,7 @@ fn safeUtf16PrefixLength(text: []const u16, requested: usize) usize {
 const StatusPiece = struct {
     text: []const u16 = &.{},
     format: Handle = null,
-    mark: Weather.SkyMark = .none,
+    mark: StatusLineWeather.Mark = .none,
     width: f32 = 0,
     after: f32 = 0,
     luminance: f32 = 0,
@@ -1945,18 +1469,18 @@ const StatusRun = struct {
     width: f32 = 0,
 };
 
-fn buildStatusRun(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, sky: []const u16, temperature: []const u16, weather_code: i32) StatusRun {
+fn buildStatusRun(self: *TextRenderer, weekday: []const u16, day: []const u16, time: []const u16, weather: StatusLineWeather.View) StatusRun {
     var run = StatusRun{};
     pushStatusText(&run.pieces, &run.count, self, weekday, self.status_weekday_format, 4, 0.88);
     pushStatusText(&run.pieces, &run.count, self, day, self.status_day_format, 10, 0.72);
     pushStatusText(&run.pieces, &run.count, self, time, self.status_time_format, 10, 0.99);
-    const mark = Weather.skyMarkForCode(weather_code);
+    const mark = weather.mark;
     if (mark != .none and run.count < run.pieces.len) {
         run.pieces[run.count] = .{ .mark = mark, .width = 16, .after = 4 };
         run.count += 1;
     }
-    pushStatusText(&run.pieces, &run.count, self, sky, self.status_weather_format, 4, 0.92);
-    pushStatusText(&run.pieces, &run.count, self, temperature, self.status_weather_format, 0, 0.80);
+    pushStatusText(&run.pieces, &run.count, self, zSlice(&weather.sky), self.status_weather_format, 4, 0.92);
+    pushStatusText(&run.pieces, &run.count, self, zSlice(&weather.temperature), self.status_weather_format, 0, 0.80);
     for (run.pieces[0..run.count]) |piece| run.width += piece.width + piece.after;
     return run;
 }
@@ -1992,7 +1516,7 @@ fn measureTextHeight(factory: *anyopaque, format: *anyopaque, text: []const u16)
     return measured.height;
 }
 
-fn drawTrackLineRun(context: *anyopaque, format: *anyopaque, brush: *anyopaque, text: []const u16, text_width: f32, box_width: f32, box_left: f32, center_y: f32, scroll_dip: f32, line_height: f32, box: Geometry.RectF, end_fade: Handle) void {
+fn drawScrollingLineRun(context: *anyopaque, format: *anyopaque, brush: *anyopaque, text: []const u16, text_width: f32, box_width: f32, box_left: f32, center_y: f32, scroll_dip: f32, line_height: f32, box: Geometry.RectF, end_fade: Handle) void {
     const inset = @min(@as(f32, 10), box_width * 0.12);
     const available = @max(0, box_width - inset * 2);
     const draw_at = struct {
@@ -2001,7 +1525,7 @@ fn drawTrackLineRun(context: *anyopaque, format: *anyopaque, brush: *anyopaque, 
             drawText(ctx, fmt, line, ink, rect);
         }
     }.call;
-    if (!CardLayout.lyricNeedsScroll(text_width, available)) {
+    if (!lineNeedsScrollForWidth(text_width, available)) {
         draw_at(context, format, brush, text, text_width, box_left + (box_width - text_width) * 0.5, center_y, line_height);
         return;
     }
@@ -2031,10 +1555,10 @@ fn drawTrackLineRun(context: *anyopaque, format: *anyopaque, brush: *anyopaque, 
     if (offset > 0) draw_at(context, format, brush, text, text_width, start - offset - stride, center_y, line_height);
 }
 
-fn createLyricFadeBrush(context: *anyopaque, box: Geometry.RectF, opacity_arg: f32) Handle {
+fn createScrollingLineFadeBrush(context: *anyopaque, box: Geometry.RectF, opacity_arg: f32) Handle {
     const width = box.right - box.left;
     if (width <= 1) return null;
-    const fade_dip = CardLayout.lyricEndFadeDip(width);
+    const fade_dip = scrollingLineFadeDip(width);
     const fade_fraction = fade_dip / width;
     if (fade_fraction <= 0.001) return null;
     const solid = std.math.clamp(opacity_arg, 0, 1);
@@ -2097,7 +1621,7 @@ fn appendNumber24(output: *[24]u16, cursor: *usize, value: u16) void {
     cursor.* += 1;
 }
 
-fn drawSkyMark(context: *anyopaque, box: D2DRectF, mark: Weather.SkyMark, opacity: f32) void {
+fn drawStatusMark(context: *anyopaque, box: D2DRectF, mark: StatusLineWeather.Mark, opacity: f32) void {
     if (mark == .none or opacity <= 0) return;
     const cx = (box.left + box.right) * 0.5;
     const cy = (box.top + box.bottom) * 0.5;
@@ -2180,6 +1704,24 @@ fn fillRounded(context: *anyopaque, rounded: D2DRoundedRect, color: D2DColor) vo
             f(ctx, value, brush);
         }
     }.call, &rounded);
+}
+
+fn canvasFillRoundedRect(raw: ?*anyopaque, rounded: *const CanvasModule.RoundedRect, color: *const Theme.Color) callconv(.c) void {
+    const context = raw orelse return;
+    fillRounded(context, .{
+        .rect = toD2DRect(rounded.rect),
+        .radius_x = rounded.radius_x,
+        .radius_y = rounded.radius_y,
+    }, asD2D(color.*));
+}
+
+fn canvasFillEllipse(raw: ?*anyopaque, ellipse: *const CanvasModule.Ellipse, color: *const Theme.Color) callconv(.c) void {
+    const context = raw orelse return;
+    fillEllipse(context, .{
+        .point = .{ .x = ellipse.center_x, .y = ellipse.center_y },
+        .radius_x = ellipse.radius_x,
+        .radius_y = ellipse.radius_y,
+    }, asD2D(color.*));
 }
 
 fn pushRoundedMask(context: *anyopaque, box: Geometry.RoundedBox) Handle {
@@ -2433,6 +1975,28 @@ pub fn audioWaveEnvelope(step: i32, steps: i32, phase: f32) f32 {
     const swell = 0.5 + 0.5 * @sin(t * 6.2831853 + phase);
     const ripple = 0.5 + 0.5 * @sin(t * 25.1327412 - phase * 1.7);
     return std.math.clamp(0.62 * swell + 0.38 * ripple, 0, 1);
+}
+
+fn imageFingerprint(bytes: []const u8) u64 {
+    var hash: u64 = 14695981039346656037;
+    for (bytes) |byte| {
+        hash ^= byte;
+        hash *%= 1099511628211;
+    }
+    return hash;
+}
+
+test "scrolling line threshold and fade preserve the existing strip geometry" {
+    try std.testing.expect(!lineNeedsScrollForWidth(100, 124));
+    try std.testing.expect(lineNeedsScrollForWidth(101, 124));
+    try std.testing.expectEqual(@as(f32, 10), scrollingLineFadeDip(40));
+    try std.testing.expectEqual(@as(f32, 20), scrollingLineFadeDip(120));
+    try std.testing.expectEqual(@as(f32, 0), scrollingLineFadeDip(0));
+}
+
+test "feature image cache identity includes bytes as well as revision" {
+    try std.testing.expectEqual(imageFingerprint("icon-a"), imageFingerprint("icon-a"));
+    try std.testing.expect(imageFingerprint("icon-a") != imageFingerprint("icon-b"));
 }
 
 pub fn indicatorGlyph(icon: IndicatorIcon, value: i32) u16 {

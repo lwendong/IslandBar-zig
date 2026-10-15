@@ -1,6 +1,7 @@
 const std = @import("std");
 const MiniJson = @import("MiniJson");
 const Notification = @import("Notification");
+const NotificationInput = @import("NotificationInput");
 
 extern "kernel32" fn ExitProcess(exit_code: u32) callconv(.winapi) noreturn;
 
@@ -77,13 +78,13 @@ pub fn main() void {
     check(true, "malformed documents returned", "");
 
     std.debug.print("-- step 12: notification parsing --\n", .{});
-    const parsed = Notification.Notification.fromJson("{\"app\":\"dsh\",\"title\":\"Build ok\",\"body\":\"clean\"}");
+    const parsed = NotificationInput.Message.fromJson("{\"app\":\"dsh\",\"title\":\"Build ok\",\"body\":\"clean\"}");
     check(parsed != null, "parses a message", if (parsed) |item| cString(&item.title) else "");
-    check(Notification.Notification.fromJson("{\"app\":\"dsh\"}") == null, "rejects an empty message", "");
+    check(NotificationInput.Message.fromJson("{\"app\":\"dsh\"}") == null, "rejects an empty message", "");
 
     std.debug.print("-- step 13: store push --\n", .{});
     var store = Notification.Store{};
-    const pushed = store.pushAt(parsed orelse .{}, 100);
+    const pushed = store.pushAt(Notification.Notification.fromInput(parsed orelse .{}), 100);
     check(pushed.id == 1, "push assigns id 1", "");
     check(store.count == 1 and store.unreadCount() == 1, "counts as unread", "");
 

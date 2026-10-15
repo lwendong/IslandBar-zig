@@ -1,4 +1,5 @@
 const std = @import("std");
+const SoundAudio = @import("SoundAudio");
 
 const BOOL = i32;
 const DWORD = u32;
@@ -118,7 +119,12 @@ pub const AudioVolume = struct {
     have_peak: bool = false,
     pending_level: f32 = 0,
     pending_write: bool = false,
-    pending_toggle_mute: bool = false,
+    pending_level_token: u64 = 0,
+    pending_mute: bool = false,
+    pending_mute_value: bool = false,
+    pending_mute_token: u64 = 0,
+    level_result: ?SoundAudio.OperationResult = null,
+    mute_result: ?SoundAudio.OperationResult = null,
     meter_device: ?*anyopaque = null,
     meter: ?*anyopaque = null,
 
@@ -204,24 +210,49 @@ pub const AudioVolume = struct {
     }
 
     pub fn setLevel(self: *AudioVolume, value: f32) void {
-        if (!self.lock_ready) return;
+        _ = self.setLevelWithToken(value, 0);
+    }
+
+    pub fn setLevelWithToken(self: *AudioVolume, value: f32, token: u64) bool {
+        if (!self.lock_ready) return false;
         const wanted = clamp01(value);
         self.enter();
-        self.level = wanted;
-        self.have_level = true;
         self.pending_level = wanted;
         self.pending_write = true;
+        self.pending_level_token = token;
         self.leave();
-        _ = @atomicRmw(i32, &self.revision, .Add, 1, .seq_cst);
         if (self.write_event != null) _ = SetEvent(self.write_event);
+        return true;
     }
 
     pub fn toggleMute(self: *AudioVolume) void {
-        if (!self.lock_ready) return;
+        _ = self.setMutedWithToken(!self.isMuted(), 0);
+    }
+
+    pub fn setMutedWithToken(self: *AudioVolume, wanted: bool, token: u64) bool {
+        if (!self.lock_ready) return false;
         self.enter();
-        self.pending_toggle_mute = true;
+        self.pending_mute = true;
+        self.pending_mute_value = wanted;
+        self.pending_mute_token = token;
         self.leave();
-        if (self.write_event != null) _ = SetEvent(self.write_event);
+        if (self.write_event) |event| _ = SetEvent(event);
+        return true;
+    }
+
+    pub fn takeResult(self: *AudioVolume) ?SoundAudio.OperationResult {
+        if (!self.lock_ready) return null;
+        self.enter();
+        defer self.leave();
+        if (self.level_result) |result| {
+            self.level_result = null;
+            return result;
+        }
+        if (self.mute_result) |result| {
+            self.mute_result = null;
+            return result;
+        }
+        return null;
     }
 
     pub fn getRevision(self: *AudioVolume) u64 {
@@ -290,7 +321,7 @@ pub const AudioVolume = struct {
 
     fn run(self: *AudioVolume) void {
         const apartment_hr = CoInitializeEx(null, 0);
-        const have_apartment = succeeded(apartment_hr) or apartment_hr == @as(HRESULT, @bitCast(@as(u32, 0x80010106)));
+        const have_apartment = succeeded(apartment_hr);
         var last_volume_read = GetTickCount64();
         if (have_apartment) _ = self.readFromDevice();
 
@@ -316,33 +347,59 @@ pub const AudioVolume = struct {
     fn applyPendingWrites(self: *AudioVolume) void {
         var wanted: f32 = 0;
         var do_write = false;
-        var do_toggle_mute = false;
+        var level_token: u64 = 0;
+        var do_mute = false;
+        var wanted_mute = false;
+        var mute_token: u64 = 0;
         self.enter();
         if (self.pending_write) {
             wanted = self.pending_level;
+            level_token = self.pending_level_token;
             self.pending_write = false;
             do_write = true;
         }
-        if (self.pending_toggle_mute) {
-            self.pending_toggle_mute = false;
-            do_toggle_mute = true;
+        if (self.pending_mute) {
+            wanted_mute = self.pending_mute_value;
+            mute_token = self.pending_mute_token;
+            self.pending_mute = false;
+            do_mute = true;
         }
         self.leave();
-        if (!do_write and !do_toggle_mute) return;
+        if (!do_write and !do_mute) return;
 
-        const enumerator = createEnumerator() orelse return;
+        var result_hr: HRESULT = @bitCast(@as(u32, 0x80004005));
+        var create_hr: HRESULT = 0;
+        const enumerator = createEnumeratorWithResult(&create_hr) orelse {
+            self.publishResult(if (do_write) .{ .token = level_token, .operation = .master_volume, .hresult = create_hr } else null, if (do_mute) .{ .token = mute_token, .operation = .master_mute, .hresult = create_hr } else null);
+            return;
+        };
         defer release(enumerator);
         var device: ?*anyopaque = null;
-        if (!succeeded(vtable(DeviceEnumeratorVTable, enumerator).get_default_audio_endpoint(enumerator, eRender, eConsole, &device)) or device == null) return;
+        const device_hr = vtable(DeviceEnumeratorVTable, enumerator).get_default_audio_endpoint(enumerator, eRender, eConsole, &device);
+        if (!succeeded(device_hr) or device == null) {
+            result_hr = if (!succeeded(device_hr)) device_hr else @bitCast(@as(u32, 0x80004005));
+            self.publishResult(if (do_write) .{ .token = level_token, .operation = .master_volume, .hresult = result_hr } else null, if (do_mute) .{ .token = mute_token, .operation = .master_mute, .hresult = result_hr } else null);
+            return;
+        }
         defer release(device);
-        const endpoint = activate(device, &IID_IAudioEndpointVolume) orelse return;
+        var endpoint: ?*anyopaque = null;
+        const endpoint_hr = vtable(DeviceVTable, device).activate(device.?, &IID_IAudioEndpointVolume, CLSCTX_ALL, null, &endpoint);
+        if (!succeeded(endpoint_hr) or endpoint == null) {
+            result_hr = if (!succeeded(endpoint_hr)) endpoint_hr else @bitCast(@as(u32, 0x80004005));
+            self.publishResult(if (do_write) .{ .token = level_token, .operation = .master_volume, .hresult = result_hr } else null, if (do_mute) .{ .token = mute_token, .operation = .master_mute, .hresult = result_hr } else null);
+            return;
+        }
         defer release(endpoint);
         const endpoint_vtable = vtable(EndpointVolumeVTable, endpoint);
-        if (do_write) _ = endpoint_vtable.set_master_volume_level_scalar(endpoint, wanted, null);
-        if (do_toggle_mute) {
-            var muted: BOOL = 0;
-            if (succeeded(endpoint_vtable.get_mute(endpoint, &muted))) _ = endpoint_vtable.set_mute(endpoint, if (muted == 0) 1 else 0, null);
-        }
+        if (do_write) self.publishResult(.{ .token = level_token, .operation = .master_volume, .hresult = endpoint_vtable.set_master_volume_level_scalar(endpoint.?, wanted, null) }, null);
+        if (do_mute) self.publishResult(null, .{ .token = mute_token, .operation = .master_mute, .hresult = endpoint_vtable.set_mute(endpoint.?, @intFromBool(wanted_mute), null) });
+    }
+
+    fn publishResult(self: *AudioVolume, level: ?SoundAudio.OperationResult, mute: ?SoundAudio.OperationResult) void {
+        self.enter();
+        if (level) |result| self.level_result = result;
+        if (mute) |result| self.mute_result = result;
+        self.leave();
     }
 
     fn releaseMeter(self: *AudioVolume) void {
@@ -383,8 +440,14 @@ fn threadEntry(parameter: ?*anyopaque) callconv(.winapi) DWORD {
 }
 
 fn createEnumerator() ?*anyopaque {
+    var hr: HRESULT = 0;
+    return createEnumeratorWithResult(&hr);
+}
+
+fn createEnumeratorWithResult(out_hr: *HRESULT) ?*anyopaque {
     var result: ?*anyopaque = null;
-    if (!succeeded(CoCreateInstance(&CLSID_MMDeviceEnumerator, null, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &result))) return null;
+    out_hr.* = CoCreateInstance(&CLSID_MMDeviceEnumerator, null, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &result);
+    if (!succeeded(out_hr.*)) return null;
     return result;
 }
 

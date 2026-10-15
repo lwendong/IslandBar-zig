@@ -1,5 +1,5 @@
 const std = @import("std");
-const StartMenu = @import("StartMenu");
+const ShellCommand = @import("ShellCommand");
 
 pub const NightLightState = enum { unknown, off, on };
 
@@ -671,7 +671,7 @@ pub fn liveCaptionsRunning() bool {
 
 /// Toggles Windows Live Captions through its Win+Ctrl+L shortcut.
 pub fn toggleLiveCaptions() bool {
-    return StartMenu.sendWindowsCtrlKeyChord('L');
+    return ShellCommand.sendWindowsCtrlKeyChord('L');
 }
 
 fn wideAsciiEqlIgnoreCase(wide: []const u16, ascii: []const u8) bool {

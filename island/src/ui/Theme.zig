@@ -1,5 +1,5 @@
 const std = @import("std");
-const Log = @import("Log");
+const ThemeTokens = @import("ThemeTokens");
 
 const HANDLE = ?*anyopaque;
 const DWORD = u32;
@@ -41,7 +41,8 @@ extern "kernel32" fn FindFirstFileW(pattern: [*:0]const u16, data: *FindDataW) c
 extern "kernel32" fn FindNextFileW(search: HANDLE, data: *FindDataW) callconv(.winapi) i32;
 extern "kernel32" fn FindClose(search: HANDLE) callconv(.winapi) i32;
 
-pub const Color = extern struct { r: f32, g: f32, b: f32, a: f32 };
+pub const Color = ThemeTokens.Color;
+pub const LogFn = *const fn ([]const u8) void;
 pub const Theme = struct {
     name: [32]u16 = @splat(0),
     pill_top: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -49,8 +50,10 @@ pub const Theme = struct {
     gloss: f32 = 0,
     card_fill: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
     card_edge: f32 = 0,
-    accent: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-    ink: Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+    tokens: ThemeTokens.Tokens = .{
+        .accent = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .ink = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+    },
     shadow: f32 = 0,
     grain: f32 = 0,
 };
@@ -63,8 +66,7 @@ const built_in_themes = [_]Theme{
         .gloss = 0.06,
         .card_fill = color(0.05, 0.05, 0.07, 0.97),
         .card_edge = 0.13,
-        .accent = color(0.0, 0.47, 0.83, 0.95),
-        .ink = color(0.93, 0.93, 0.93, 1.0),
+        .tokens = .{ .accent = color(0.0, 0.47, 0.83, 0.95), .ink = color(0.93, 0.93, 0.93, 1.0) },
     },
     .{
         .name = wideName(&.{ 0x51B0, 0x84DD }),
@@ -73,8 +75,7 @@ const built_in_themes = [_]Theme{
         .gloss = 0.10,
         .card_fill = color(0.04, 0.06, 0.12, 0.97),
         .card_edge = 0.16,
-        .accent = color(0.20, 0.62, 0.98, 0.95),
-        .ink = color(0.90, 0.94, 1.0, 1.0),
+        .tokens = .{ .accent = color(0.20, 0.62, 0.98, 0.95), .ink = color(0.90, 0.94, 1.0, 1.0) },
         .shadow = 0.05,
         .grain = 0.02,
     },
@@ -85,8 +86,7 @@ const built_in_themes = [_]Theme{
         .gloss = 0.05,
         .card_fill = color(0.11, 0.11, 0.12, 0.97),
         .card_edge = 0.18,
-        .accent = color(0.24, 0.56, 0.90, 0.95),
-        .ink = color(0.99, 0.99, 0.99, 1.0),
+        .tokens = .{ .accent = color(0.24, 0.56, 0.90, 0.95), .ink = color(0.99, 0.99, 0.99, 1.0) },
         .shadow = 0.05,
     },
     .{
@@ -96,8 +96,7 @@ const built_in_themes = [_]Theme{
         .gloss = 0.16,
         .card_fill = color(0.12, 0.14, 0.20, 0.78),
         .card_edge = 0.34,
-        .accent = color(0.42, 0.78, 1.0, 0.95),
-        .ink = color(0.98, 0.99, 1.0, 1.0),
+        .tokens = .{ .accent = color(0.42, 0.78, 1.0, 0.95), .ink = color(0.98, 0.99, 1.0, 1.0) },
         .shadow = 0.20,
         .grain = 0.05,
     },
@@ -252,12 +251,12 @@ fn equalWideIgnoreCase(a: []const u16, b: []const u16) bool {
     return true;
 }
 
-fn logTheme(theme: *const Theme, reason: []const u8) void {
+fn logTheme(theme: *const Theme, reason: []const u8, log_fn: LogFn) void {
     var name: [128]u8 = undefined;
     const name_len = wideToUtf8(&theme.name, &name);
     var line: [256]u8 = undefined;
     const formatted = std.fmt.bufPrint(&line, "theme: {s} ({s}), ink contrast {d:.1}:1", .{ name[0..name_len], reason, inkContrast(theme) }) catch return;
-    Log.logLine(formatted);
+    log_fn(formatted);
 }
 
 /// Returns the active theme. The pointer remains valid for the process lifetime.
@@ -292,17 +291,16 @@ pub fn builtInTheme(index: usize) ?*const Theme {
     return &built_in_themes[index];
 }
 
-pub fn cycleTheme() *const Theme {
+pub fn cycleTheme(log_fn: LogFn) *const Theme {
     ensureInitialized();
     current_index = (current_index + 1) % theme_count;
-    logTheme(&themes[current_index], "switched");
+    logTheme(&themes[current_index], "switched", log_fn);
     _ = saveThemeChoice(&themes[current_index].name);
     return &themes[current_index];
 }
 
 pub fn themeInk(alpha: f32) Color {
-    const ink = currentTheme().ink;
-    return color(ink.r, ink.g, ink.b, clamp01(alpha) * clamp01(ink.a));
+    return ThemeTokens.withOpacity(currentTheme().tokens.ink, alpha);
 }
 
 fn clamp01(value: f32) f32 {
@@ -327,7 +325,7 @@ pub fn inkContrast(theme: *const Theme) f32 {
         theme.card_fill.b * alpha + backdrop * (1 - alpha),
         1,
     );
-    const first = luminance(theme.ink);
+    const first = luminance(theme.tokens.ink);
     const second = luminance(effective);
     return (@max(first, second) + 0.05) / (@min(first, second) + 0.05);
 }
@@ -369,7 +367,7 @@ pub fn themeFromText(text_arg: []const u8, out: *Theme, why: []u8) bool {
                 appendWhy(why, "not a colour (0..1 per channel): ", key, value);
                 return false;
             };
-            if (std.mem.eql(u8, key, "pill-top")) theme.pill_top = parsed else if (std.mem.eql(u8, key, "pill-bottom")) theme.pill_bottom = parsed else if (std.mem.eql(u8, key, "card")) theme.card_fill = parsed else if (std.mem.eql(u8, key, "accent")) theme.accent = parsed else theme.ink = parsed;
+            if (std.mem.eql(u8, key, "pill-top")) theme.pill_top = parsed else if (std.mem.eql(u8, key, "pill-bottom")) theme.pill_bottom = parsed else if (std.mem.eql(u8, key, "card")) theme.card_fill = parsed else if (std.mem.eql(u8, key, "accent")) theme.tokens.accent = parsed else theme.tokens.ink = parsed;
             applied += 1;
         } else if (std.mem.eql(u8, key, "gloss") or std.mem.eql(u8, key, "card-edge") or std.mem.eql(u8, key, "shadow") or std.mem.eql(u8, key, "grain")) {
             const parsed = parseScalar(value) orelse {
@@ -430,7 +428,7 @@ pub fn saveThemeChoice(name: []const u16) bool {
     return writeAll(file, "\r\n");
 }
 
-fn loadUserThemes() void {
+fn loadUserThemes(log_fn: LogFn) void {
     ensureInitialized();
     if (theme_count >= themes.len) return;
     var directory: [MAX_PATH]u16 = @splat(0);
@@ -442,7 +440,7 @@ fn loadUserThemes() void {
     var found: FindDataW = undefined;
     const search = FindFirstFileW(@ptrCast(&pattern), &found);
     if (isInvalid(search)) {
-        Log.logLine("theme: no themes directory");
+        log_fn("theme: no themes directory");
         return;
     }
     defer _ = FindClose(search);
@@ -467,9 +465,11 @@ fn loadUserThemes() void {
                                 if (themeFromText(content, &parsed, &why)) {
                                     themes[theme_count] = parsed;
                                     theme_count += 1;
-                                    logTheme(&parsed, "loaded from themes");
+                                    logTheme(&parsed, "loaded from themes", log_fn);
                                 } else {
-                                    Log.logLine(std.fmt.allocPrint(std.heap.page_allocator, "theme file skipped: {s}", .{cBytes(&why)}) catch "theme file skipped");
+                                    var line: [320]u8 = undefined;
+                                    const message = std.fmt.bufPrint(&line, "theme file skipped: {s}", .{cBytes(&why)}) catch "theme file skipped";
+                                    log_fn(message);
                                 }
                             }
                         }
@@ -481,14 +481,14 @@ fn loadUserThemes() void {
     }
 }
 
-pub fn applyRememberedTheme() void {
+pub fn applyRememberedTheme(log_fn: LogFn) void {
     ensureInitialized();
-    loadUserThemes();
+    loadUserThemes(log_fn);
     var path: [MAX_PATH]u16 = @splat(0);
     if (!dataFilePath(&.{ 't', 'h', 'e', 'm', 'e', '.', 't', 'x', 't' }, &path)) return;
     const file = CreateFileW(@ptrCast(&path), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, null, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, null);
     if (isInvalid(file)) {
-        logTheme(&themes[current_index], "built-in default");
+        logTheme(&themes[current_index], "built-in default", log_fn);
         return;
     }
     defer _ = CloseHandle(file);
@@ -505,14 +505,14 @@ pub fn applyRememberedTheme() void {
         for (themes[0..theme_count], 0..) |*theme, i| {
             if (equalWideIgnoreCase(&theme.name, &wanted)) {
                 current_index = i;
-                logTheme(theme, "remembered by theme.txt");
+                logTheme(theme, "remembered by theme.txt", log_fn);
                 return;
             }
         }
-        Log.logLine("theme.txt names an unknown theme; keeping current theme");
+        log_fn("theme.txt names an unknown theme; keeping current theme");
         return;
     }
-    logTheme(&themes[current_index], "theme.txt is empty; using default");
+    logTheme(&themes[current_index], "theme.txt is empty; using default", log_fn);
 }
 
 pub fn smokeCheck() bool {
@@ -525,12 +525,18 @@ pub fn smokeCheck() bool {
     var why: [128]u8 = @splat(0);
     if (!themeFromText(source, &parsed, &why)) return false;
     if (!equalWideIgnoreCase(&parsed.name, &.{ 'T', 'e', 's', 't', ' ', 'T', 'h', 'e', 'm', 'e', 0 })) return false;
-    if (parsed.accent.r != 0.2 or parsed.accent.g != 0.4 or parsed.accent.b != 0.8 or parsed.accent.a != 1) return false;
+    if (parsed.tokens.accent.r != 0.2 or parsed.tokens.accent.g != 0.4 or parsed.tokens.accent.b != 0.8 or parsed.tokens.accent.a != 1) return false;
     if (themeFromText("name=Only Name\n", &parsed, &why)) return false;
     if (themeFromText("name=Broken\naccent=0,2,0\n", &parsed, &why)) return false;
     if (themeFromText("name=Broken\nunknown=x\n", &parsed, &why)) return false;
     return currentThemeIndex() == 0;
 }
+
+test "theme parsing preserves shared token values and contrast checks" {
+    try std.testing.expect(smokeCheck());
+}
+
+fn ignoreLog(_: []const u8) void {}
 
 comptime {
     if (false) {
@@ -538,6 +544,6 @@ comptime {
         var reason: [128]u8 = undefined;
         _ = themeFromText("name=x\naccent=0.1,0.2,0.3\n", &theme, &reason);
         _ = saveThemeChoice(&theme.name);
-        applyRememberedTheme();
+        applyRememberedTheme(ignoreLog);
     }
 }

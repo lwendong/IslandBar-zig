@@ -1,6 +1,6 @@
 const Geometry = @import("Geometry");
 const Motion = @import("Motion");
-const TaskStripLayout = @import("TaskStripLayout");
+const BarControlLayout = @import("BarControlLayout");
 
 pub const Region = struct { left: i32, top: i32, right: i32, bottom: i32 };
 
@@ -12,7 +12,7 @@ pub const Frame = struct {
     current: Geometry.RoundedBox,
     card_up: bool = false,
     card_left_dip: f32 = 0,
-    task_icon_count: i32 = 0,
+    task_row_bounds: Geometry.RectF = .{},
     status_strip_width_dip: f32 = 0,
     tray_icon_count: i32 = 0,
 };
@@ -37,45 +37,23 @@ pub fn forFrame(frame: Frame) Region {
     }
 
     const tray_visible = frame.tray_icon_count > 0;
-    const cluster = TaskStripLayout.barClusterFor(target_island, tray_visible);
+    const cluster = BarControlLayout.barClusterFor(target_island, tray_visible);
     left = @min(left, cluster.rect.left);
 
     if (frame.status_strip_width_dip > 0) {
-        left = @min(left, TaskStripLayout.statusStripFor(target_island).rect.left);
+        left = @min(left, BarControlLayout.statusStripFor(target_island).rect.left);
     }
     left = @max(0, left);
 
-    const resting_row = Motion.rowAnchorBox(frame.current, resting);
-    const row_with_tray = TaskStripLayout.rowAnchorWithTray(resting_row, tray_visible);
-    const wanted = if (frame.task_icon_count < 0)
-        TaskStripLayout.max_task_icons
-    else
-        @min(@as(usize, @intCast(frame.task_icon_count)), TaskStripLayout.max_task_icons);
-    const fitting = TaskStripLayout.taskIconsThatFitForMonitor(frame.monitor_width_dip, wanted);
-    const row_left = TaskStripLayout.taskRowFor(
-        row_with_tray,
-        @max(fitting, 1),
-        frame.card_left_dip,
-        if (frame.card_up) Motion.expanded_width_dip else 0,
-    ).left;
-    if (fitting > 0) {
-        const row_right = TaskStripLayout.taskIconButtonAt(
-            TaskStripLayout.rowAnchorWithTray(resting, tray_visible),
-            fitting - 1,
-            fitting,
-            @intCast(fitting - 1),
-            1,
-            frame.card_left_dip,
-            if (frame.card_up) Motion.expanded_width_dip else 0,
-        ).right;
-        right = @max(right, row_right);
-    } else {
-        right = @max(right, row_left);
+    const has_task_row = frame.task_row_bounds.right > frame.task_row_bounds.left and
+        frame.task_row_bounds.bottom > frame.task_row_bounds.top;
+    if (has_task_row) {
+        left = @min(left, frame.task_row_bounds.left);
+        right = @max(right, frame.task_row_bounds.right);
     }
 
-    const target_row = TaskStripLayout.taskRowFor(target_island, 1, 0, 0);
     var bottom = if (frame.card_up) card_bottom else shape.rect.bottom;
-    if (target_row.valid) bottom = @max(bottom, target_row.bottom);
+    if (has_task_row) bottom = @max(bottom, frame.task_row_bounds.bottom);
     bottom += 2;
 
     var region = Region{
@@ -98,7 +76,7 @@ pub fn smokeCheck() bool {
         .state = .collapsed,
         .anchor = anchor,
         .current = resting,
-        .task_icon_count = 3,
+        .task_row_bounds = .{ .left = 1078, .top = 9, .right = 1180, .bottom = 39 },
     });
     if (rest_region.left < 0 or rest_region.top != 0 or rest_region.right <= rest_region.left or
         rest_region.right >= 1920 or rest_region.left > Geometry.dipToPixels(resting.rect.left, 96) or
@@ -113,8 +91,8 @@ pub fn smokeCheck() bool {
         .current = Motion.boxForState(.expanded, anchor),
         .card_up = true,
         .card_left_dip = 500,
-        .task_icon_count = 3,
-        .status_strip_width_dip = TaskStripLayout.status_strip_width_dip,
+        .task_row_bounds = .{ .left = 1078, .top = 9, .right = 1180, .bottom = 39 },
+        .status_strip_width_dip = BarControlLayout.status_strip_width_dip,
         .tray_icon_count = 1,
     });
     const expected_bottom = Geometry.dipToPixels(resting.rect.bottom + Motion.card_top_gap_dip + Motion.expanded_height_dip + 2, 144);
@@ -130,12 +108,11 @@ pub fn smokeCheck() bool {
         .current = Motion.lerpBox(Motion.boxForState(.expanded, anchor), resting, 0.5),
         .card_up = true,
         .card_left_dip = 1130,
-        .task_icon_count = 1,
+        .task_row_bounds = .{ .left = 1150, .top = 9, .right = 1650, .bottom = 39 },
         .tray_icon_count = 1,
     });
     if (closing_region.right < Geometry.dipToPixels(1650, 144) or closing_region.bottom != expected_bottom) return false;
 
-    const wide_fit = TaskStripLayout.taskIconsThatFitForMonitor(2560, TaskStripLayout.max_task_icons);
     const wide_rest = Motion.boxForState(.collapsed, Motion.anchorForWindow(0, 0, 2560, 0));
     const tray_region = forFrame(.{
         .monitor_width_dip = 2560,
@@ -143,22 +120,13 @@ pub fn smokeCheck() bool {
         .state = .collapsed,
         .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
         .current = wide_rest,
-        .task_icon_count = -1,
-        .tray_icon_count = TaskStripLayout.max_tray_icons,
+        .task_row_bounds = .{ .left = 1398, .top = 9, .right = 2180, .bottom = 39 },
+        .tray_icon_count = BarControlLayout.max_tray_icons,
     });
-    const tray_button = TaskStripLayout.trayButtonFor(wide_rest);
-    const last_open_icon = TaskStripLayout.taskIconButtonAt(
-        TaskStripLayout.rowAnchorWithTray(wide_rest, true),
-        wide_fit - 1,
-        wide_fit,
-        @intCast(wide_fit - 1),
-        1,
-        0,
-        0,
-    );
-    const cluster = TaskStripLayout.barClusterFor(wide_rest, true);
-    if (wide_fit == 0 or tray_region.left > @as(i32, @intFromFloat(cluster.rect.left)) or
-        tray_region.right < @as(i32, @intFromFloat(@max(tray_button.right, last_open_icon.right)))) return false;
+    const tray_button = BarControlLayout.trayButtonFor(wide_rest);
+    const cluster = BarControlLayout.barClusterFor(wide_rest, true);
+    if (tray_region.left > @as(i32, @intFromFloat(cluster.rect.left)) or
+        tray_region.right < @as(i32, @intFromFloat(@max(tray_button.right, 2180)))) return false;
 
     const with_status = forFrame(.{
         .monitor_width_dip = 2560,
@@ -166,8 +134,8 @@ pub fn smokeCheck() bool {
         .state = .collapsed,
         .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
         .current = wide_rest,
-        .task_icon_count = 8,
-        .status_strip_width_dip = TaskStripLayout.status_strip_width_dip,
+        .task_row_bounds = .{ .left = 1398, .top = 9, .right = 1700, .bottom = 39 },
+        .status_strip_width_dip = BarControlLayout.status_strip_width_dip,
     });
     const without_status = forFrame(.{
         .monitor_width_dip = 2560,
@@ -175,7 +143,7 @@ pub fn smokeCheck() bool {
         .state = .collapsed,
         .anchor = Motion.anchorForWindow(0, 0, 2560, 0),
         .current = wide_rest,
-        .task_icon_count = 8,
+        .task_row_bounds = .{ .left = 1398, .top = 9, .right = 1700, .bottom = 39 },
     });
     if (with_status.left >= without_status.left or with_status.bottom != without_status.bottom) return false;
 

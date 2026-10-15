@@ -1,11 +1,14 @@
-pub const PlaybackState = enum(i32) { closed = 0, stopped = 1, paused = 2, playing = 3, unknown = 4 };
-pub const TrackPosition = struct { ms: i64 = 0, from_session: bool = false };
-pub const title_capacity = 192;
-pub const artist_capacity = 128;
-pub const album_capacity = 160;
-pub const app_capacity = 64;
-pub const app_name_capacity = 128;
-pub const artwork_capacity = 32 * 1024;
+const MusicMedia = @import("MusicMedia");
+pub const PlaybackState = MusicMedia.PlaybackState;
+pub const TrackPosition = MusicMedia.TrackPosition;
+pub const Transport = MusicMedia.Transport;
+pub const MusicInfo = MusicMedia.Snapshot;
+pub const title_capacity = MusicMedia.title_capacity;
+pub const artist_capacity = MusicMedia.artist_capacity;
+pub const album_capacity = MusicMedia.album_capacity;
+pub const app_capacity = MusicMedia.app_capacity;
+pub const app_name_capacity = MusicMedia.app_name_capacity;
+pub const artwork_capacity = MusicMedia.artwork_capacity;
 pub const artwork_max_dimension = 128;
 pub const poll_interval_ms: u64 = 1000;
 pub const skip_poll_interval_ms: u64 = 250;
@@ -46,39 +49,6 @@ const UnknownVTable = extern struct {
     release: *const fn (*anyopaque) callconv(.winapi) u32,
 };
 const Unknown = extern struct { vtable: *const UnknownVTable };
-const ShellFileInfo = extern struct {
-    icon: HANDLE,
-    icon_index: i32,
-    attributes: DWORD,
-    display_name: [260]u16,
-    type_name: [80]u16,
-};
-const BitmapV5Header = extern struct {
-    size: u32,
-    width: i32,
-    height: i32,
-    planes: u16,
-    bits_per_pixel: u16,
-    compression: u32,
-    image_size: u32,
-    x_pels_per_meter: i32,
-    y_pels_per_meter: i32,
-    colors_used: u32,
-    colors_important: u32,
-    red_mask: u32,
-    green_mask: u32,
-    blue_mask: u32,
-    alpha_mask: u32,
-    color_space_type: u32,
-    endpoints: [9]i32,
-    gamma_red: u32,
-    gamma_green: u32,
-    gamma_blue: u32,
-    intent: u32,
-    profile_data: u32,
-    profile_size: u32,
-    reserved: u32,
-};
 
 extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) HANDLE;
 extern "kernel32" fn GetModuleFileNameW(module: HANDLE, path: [*]u16, size: DWORD) callconv(.winapi) DWORD;
@@ -108,28 +78,11 @@ extern "advapi32" fn RegCloseKey(key: HANDLE) callconv(.winapi) i32;
 extern "version" fn GetFileVersionInfoSizeW(filename: [*:0]const u16, handle: *DWORD) callconv(.winapi) DWORD;
 extern "version" fn GetFileVersionInfoW(filename: [*:0]const u16, handle: DWORD, size: DWORD, data: *anyopaque) callconv(.winapi) BOOL;
 extern "version" fn VerQueryValueW(block: *const anyopaque, sub_block: [*:0]const u16, value: *?*anyopaque, length: *DWORD) callconv(.winapi) BOOL;
-extern "user32" fn GetDC(window: HANDLE) callconv(.winapi) HANDLE;
-extern "user32" fn ReleaseDC(window: HANDLE, dc: HANDLE) callconv(.winapi) i32;
-extern "user32" fn DrawIconEx(dc: HANDLE, x: i32, y: i32, icon: HANDLE, width: i32, height: i32, step: u32, brush: HANDLE, flags: u32) callconv(.winapi) BOOL;
-extern "user32" fn DestroyIcon(icon: HANDLE) callconv(.winapi) BOOL;
-extern "gdi32" fn CreateCompatibleDC(dc: HANDLE) callconv(.winapi) HANDLE;
-extern "gdi32" fn DeleteDC(dc: HANDLE) callconv(.winapi) BOOL;
-extern "gdi32" fn CreateDIBSection(dc: HANDLE, info: *const BitmapV5Header, usage: u32, bits: *?*anyopaque, section: HANDLE, offset: DWORD) callconv(.winapi) HANDLE;
-extern "gdi32" fn SelectObject(dc: HANDLE, object: HANDLE) callconv(.winapi) HANDLE;
-extern "gdi32" fn DeleteObject(object: HANDLE) callconv(.winapi) BOOL;
-extern "gdi32" fn GdiFlush() callconv(.winapi) BOOL;
-extern "shell32" fn SHGetFileInfoW(path: [*:0]const u16, attributes: DWORD, info: *ShellFileInfo, size: u32, flags: u32) callconv(.winapi) usize;
 
 const wait_object_0: DWORD = 0;
 const wait_timeout: DWORD = 258;
 const infinite: DWORD = 0xFFFFFFFF;
 const cp_utf8: DWORD = 65001;
-const shgfi_icon: u32 = 0x100;
-const shgfi_small_icon: u32 = 0x1;
-const dib_rgb_colors: u32 = 0;
-const bi_bitfields: u32 = 3;
-const di_normal: u32 = 3;
-const app_icon_side: i32 = 32;
 const invalid_file_attributes: DWORD = 0xffffffff;
 const file_attribute_directory: DWORD = 0x10;
 const invalid_handle_value: usize = std.math.maxInt(usize);
@@ -158,24 +111,6 @@ fn reportStartupFailure(stage: []const u8, hresult: ?i32) void {
         Log.logLine("GSMTC access denied: the app package must declare the globalMediaControl capability");
     }
 }
-
-pub const MusicInfo = struct {
-    present: bool = false,
-    state: PlaybackState = .closed,
-    title: [title_capacity]u8 = @splat(0),
-    artist: [artist_capacity]u8 = @splat(0),
-    album: [album_capacity]u8 = @splat(0),
-    app: [app_capacity]u8 = @splat(0),
-    position_ms: i64 = 0,
-    duration_ms: i64 = 0,
-    artwork: [artwork_capacity]u8 = @splat(0),
-    artwork_size: usize = 0,
-    artwork_revision: u64 = 0,
-    app_name: [app_name_capacity]u8 = @splat(0),
-    icon: [artwork_capacity]u8 = @splat(0),
-    icon_size: usize = 0,
-    icon_revision: u64 = 0,
-};
 
 pub fn projectedPositionMs(position_ms: i64, duration_ms: i64, elapsed_ms: i64, playing: bool) i64 {
     if (!playing or position_ms <= 0 or duration_ms <= 0 or elapsed_ms <= 0) return position_ms;
@@ -241,63 +176,9 @@ pub fn nextPollIntervalMs(now_ms: u64, last_skip_ms: u64, last_track_change_ms: 
     return if (within_window(now_ms, last_skip_ms) or within_window(now_ms, last_track_change_ms)) skip_poll_interval_ms else poll_interval_ms;
 }
 
-/// Extracts a real file icon through the Shell, draws it into the same top-down
-/// 32-bit DIB used by the C++ implementation, and encodes it with the Zig PNG
-/// writer. The caller owns the output buffer; no GDI or decoder memory escapes.
-pub fn fetchAppIconForTest(executable_path: []const u16, output: []u8) usize {
-    const path_len = std.mem.indexOfScalar(u16, executable_path, 0) orelse executable_path.len;
-    if (path_len == 0 or path_len >= 260 or output.len == 0) return 0;
-    var path: [260]u16 = @splat(0);
-    @memcpy(path[0..path_len], executable_path[0..path_len]);
-    const path_z: [*:0]const u16 = @ptrCast(&path);
-
-    var info = std.mem.zeroes(ShellFileInfo);
-    if (SHGetFileInfoW(path_z, 0, &info, @intCast(@sizeOf(ShellFileInfo)), shgfi_icon | shgfi_small_icon) == 0 or info.icon == null) return 0;
-    defer _ = DestroyIcon(info.icon);
-
-    const header = BitmapV5Header{
-        .size = @intCast(@sizeOf(BitmapV5Header)),
-        .width = app_icon_side,
-        .height = -app_icon_side,
-        .planes = 1,
-        .bits_per_pixel = 32,
-        .compression = bi_bitfields,
-        .image_size = @intCast(app_icon_side * app_icon_side * 4),
-        .x_pels_per_meter = 0,
-        .y_pels_per_meter = 0,
-        .colors_used = 0,
-        .colors_important = 0,
-        .red_mask = 0x00FF0000,
-        .green_mask = 0x0000FF00,
-        .blue_mask = 0x000000FF,
-        .alpha_mask = 0xFF000000,
-        .color_space_type = 0,
-        .endpoints = @splat(0),
-        .gamma_red = 0,
-        .gamma_green = 0,
-        .gamma_blue = 0,
-        .intent = 0,
-        .profile_data = 0,
-        .profile_size = 0,
-        .reserved = 0,
-    };
-
-    const screen = GetDC(null);
-    if (screen == null) return 0;
-    defer _ = ReleaseDC(null, screen);
-    const memory = CreateCompatibleDC(screen) orelse return 0;
-    defer _ = DeleteDC(memory);
-    var bits: ?*anyopaque = null;
-    const bitmap = CreateDIBSection(memory, &header, dib_rgb_colors, &bits, null, 0) orelse return 0;
-    defer _ = DeleteObject(bitmap);
-    const pixel_memory = bits orelse return 0;
-    const previous = SelectObject(memory, bitmap) orelse return 0;
-    _ = DrawIconEx(memory, 0, 0, info.icon, app_icon_side, app_icon_side, 0, null, di_normal);
-    _ = GdiFlush();
-    _ = SelectObject(memory, previous);
-    const pixels: [*]const u8 = @ptrCast(pixel_memory);
-    const byte_count: usize = @intCast(app_icon_side * app_icon_side * 4);
-    return WicImage.encodeBgraToPng(pixels[0..byte_count], app_icon_side, app_icon_side, output);
+/// Uses the injected icon port so session policy stays independent of Shell/GDI.
+pub fn fetchAppIconForTest(executable_path: []const u16, output: []u8, fetch_icon: AppIcon.FetchPngFn) usize {
+    return fetch_icon(executable_path, output);
 }
 
 /// Resolves the executable named by a GSMTC app id. Desktop sessions usually
@@ -327,10 +208,10 @@ pub fn executableFromAppId(app_id_arg: []const u16, output: []u16) bool {
     return searchInstallRoots(base, output);
 }
 
-pub fn fetchIconForAppId(app_id: []const u16, output: []u8) usize {
+pub fn fetchIconForAppId(app_id: []const u16, output: []u8, fetch_icon: AppIcon.FetchPngFn) usize {
     var executable: [260]u16 = @splat(0);
     if (!executableFromAppId(app_id, &executable)) return 0;
-    return fetchAppIconForTest(wideZSlice(&executable), output);
+    return fetchAppIconForTest(wideZSlice(&executable), output, fetch_icon);
 }
 
 fn resolveBareExecutable(file_name: []const u16, output: []u16) bool {
@@ -607,8 +488,6 @@ pub fn knownPlayerDisplayName(executable: []const u16) ?[]const u16 {
     if (eqlAsciiIgnoreCase(base, "cloudmusic.exe") or eqlAsciiIgnoreCase(base, "cloudmusic_pc.exe")) return &.{ 0x7F51, 0x6613, 0x4E91, 0x97F3, 0x4E50 };
     return null;
 }
-
-pub const Transport = enum { play_pause, previous, next };
 
 const WinRtApi = struct {
     module: HANDLE,
@@ -920,7 +799,7 @@ fn convertStatus(status: i32) PlaybackState {
     };
 }
 
-fn pollManager(api: *const WinRtApi, previous: *const MusicInfo, fresh: *MusicInfo, stop_event: HANDLE) bool {
+fn pollManager(api: *const WinRtApi, previous: *const MusicInfo, fresh: *MusicInfo, stop_event: HANDLE, fetch_icon: AppIcon.FetchPngFn) bool {
     var manager = createSessionManager(api, stop_event);
     if (manager == null) return false;
     defer releaseCom(&manager);
@@ -956,7 +835,7 @@ fn pollManager(api: *const WinRtApi, previous: *const MusicInfo, fresh: *MusicIn
             var executable_slice: []const u16 = &.{};
             if (app_id_length > 0 and executableFromAppId(app_id_wide[0..app_id_length], &executable)) {
                 executable_slice = wideZSlice(&executable);
-                fresh.icon_size = fetchAppIconForTest(executable_slice, &fresh.icon);
+                fresh.icon_size = fetch_icon(executable_slice, &fresh.icon);
                 if (fresh.icon_size > 0) fresh.icon_revision = previous.icon_revision +% 1;
             }
             fillAppDisplayName(&fresh.app, if (app_id_length != 0) app_id_wide[0..app_id_length] else &.{}, executable_slice, &fresh.app_name);
@@ -1034,6 +913,7 @@ fn infoChanged(a: *const MusicInfo, b: *const MusicInfo) bool {
 
 /// Owns the GSMTC apartment and worker. All WinRT calls stay on that worker; the UI only copies snapshots.
 pub const MusicSession = struct {
+    app_icon_fetch: AppIcon.FetchPngFn = AppIcon.unavailable,
     stop_event: HANDLE = null,
     action_event: HANDLE = null,
     thread: HANDLE = null,
@@ -1209,7 +1089,7 @@ pub const MusicSession = struct {
             const tick = GetTickCount();
             if (tick -% last_poll < interval) continue;
             last_poll = tick;
-            if (!pollManager(&api, previous, fresh, self.stop_event)) {
+            if (!pollManager(&api, previous, fresh, self.stop_event, self.app_icon_fetch)) {
                 reportStartupFailure("creating a session manager", null);
                 continue;
             }
@@ -1283,6 +1163,39 @@ pub fn smokeCheck() bool {
         nextPollIntervalMs(1000, 0, 1001) == poll_interval_ms;
 }
 
+test "GSMTC selection, position projection, and artwork retry policy" {
+    try std.testing.expect(smokeCheck());
+}
+
 const std = @import("std");
 const Log = @import("Log");
+const AppIcon = @import("AppIcon");
 const WicImage = @import("WicImage");
+
+pub const ArtworkAccent = struct {
+    r: f32 = 0.40,
+    g: f32 = 0.80,
+    b: f32 = 0.95,
+    from_artwork: bool = false,
+};
+
+pub const ArtworkPreparation = struct {
+    accent: ArtworkAccent = .{},
+    background_size: usize = 0,
+};
+
+/// Decodes the cover for the feature accent and prepares the small card wash on the Windows side.
+pub fn prepareArtwork(png: []const u8, background_output: []u8) ArtworkPreparation {
+    var prepared = ArtworkPreparation{};
+    var decoded = WicImage.DecodedImage{};
+    if (WicImage.decodeImage(png, &decoded, .artwork) and decoded.pixels != null and decoded.width > 0 and decoded.height > 0) {
+        const pixel_count = std.math.mul(usize, @intCast(decoded.width), @intCast(decoded.height)) catch 0;
+        const byte_count = std.math.mul(usize, pixel_count, 4) catch 0;
+        if (byte_count > 0) {
+            const accent = WicImage.accentColourFromArtwork(decoded.pixels.?[0..byte_count], decoded.width, decoded.height);
+            prepared.accent = .{ .r = accent.r, .g = accent.g, .b = accent.b, .from_artwork = accent.from_artwork };
+        }
+    }
+    prepared.background_size = WicImage.makeBlurredBackgroundPng(png, 105, 59, background_output);
+    return prepared;
+}

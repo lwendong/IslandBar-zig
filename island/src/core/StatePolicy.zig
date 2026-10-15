@@ -1,4 +1,5 @@
 const Motion = @import("Motion");
+const std = @import("std");
 
 pub const IslandState = Motion.IslandState;
 
@@ -79,4 +80,25 @@ pub fn nextShapeLegacy(shape: IslandState, resting: IslandState, pointer_inside:
 
 pub fn statusPlacementFor(island_line_taken: bool) StatusPlacement {
     return .{ .in_island = !island_line_taken, .beside_deck = island_line_taken };
+}
+
+test "shell state policy preserves fullscreen, panel, notification, and music priority" {
+    try std.testing.expectEqual(IslandState.full_bar, nextShape(.{ .fullscreen_app = true }));
+    try std.testing.expectEqual(IslandState.notice_strip, nextShape(.{ .fullscreen_app = true, .notification_active = true }));
+    try std.testing.expectEqual(IslandState.expanded, nextShape(.{ .system_panel_open = true, .notification_active = true }));
+    try std.testing.expectEqual(IslandState.notice_strip, nextShape(.{ .notification_active = true, .music_present = true }));
+    try std.testing.expectEqual(IslandState.expanded, nextShape(.{
+        .shape = .hover,
+        .pointer_inside = true,
+        .pointer_on_island = true,
+        .music_present = true,
+    }));
+}
+
+test "shell state policy returns an expanded card to its resting state" {
+    try std.testing.expectEqual(IslandState.music_strip, nextShape(.{
+        .shape = .expanded,
+        .resting = .music_strip,
+        .pointer_inside = true,
+    }));
 }

@@ -16,7 +16,7 @@ pub const Request = struct {
     has_uid: bool = false,
     has_guid: bool = false,
     guid: Guid = .{},
-    exe_path: [260]u16 = @splat(0),
+    exe_path: [512]u16 = @splat(0),
     name: [96]u16 = @splat(0),
 };
 pub const Result = enum { pressed, found, not_in_shell, no_window, no_element, no_taskbar, refused };
@@ -69,6 +69,8 @@ extern "kernel32" fn CreateToolhelp32Snapshot(flags: DWORD, process_id: DWORD) c
 extern "kernel32" fn Process32FirstW(snapshot: HANDLE, entry: *ProcessEntry32W) callconv(.winapi) BOOL;
 extern "kernel32" fn Process32NextW(snapshot: HANDLE, entry: *ProcessEntry32W) callconv(.winapi) BOOL;
 extern "kernel32" fn CloseHandle(handle: HANDLE) callconv(.winapi) BOOL;
+extern "kernel32" fn OpenProcess(access: DWORD, inherit: BOOL, process_id: DWORD) callconv(.winapi) HANDLE;
+extern "kernel32" fn QueryFullProcessImageNameW(process: HANDLE, flags: DWORD, path: [*]u16, length: *DWORD) callconv(.winapi) BOOL;
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 extern "kernel32" fn Sleep(milliseconds: DWORD) callconv(.winapi) void;
 extern "kernel32" fn CompareStringOrdinal(a: [*]const u16, a_length: i32, b: [*]const u16, b_length: i32, ignore_case: BOOL) callconv(.winapi) i32;
@@ -104,6 +106,7 @@ const swp_nozorder: DWORD = 0x4;
 const swp_noactivate: DWORD = 0x10;
 const mouseeventf_rightdown: DWORD = 0x0008;
 const mouseeventf_rightup: DWORD = 0x0010;
+const process_query_limited_information: DWORD = 0x1000;
 
 var press_in_flight = std.atomic.Value(bool).init(false);
 var cleanup_taskbar = std.atomic.Value(usize).init(0);
@@ -315,10 +318,19 @@ pub fn iconRect(request: *const Request, output: *Rect) bool {
     collectWindows(allocator, pids.items, &windows);
     if (windows.items.len == 0) return false;
 
+    var rect_matches = std.ArrayList(Rect).empty;
+    defer rect_matches.deinit(std.heap.page_allocator);
     for (windows.items) |window| {
         var identifier = NotifyIconIdentifier{ .cb_size = @sizeOf(NotifyIconIdentifier), .window = window, .uid = request.uid, .guid = .{} };
-        if (queryRect(&identifier, output)) return true;
+        var rect = Rect{};
+        if (!queryRect(&identifier, &rect)) continue;
+        rect_matches.append(std.heap.page_allocator, rect) catch return false;
     }
+    if (uniqueRect(rect_matches.items)) |found| {
+        output.* = found;
+        return true;
+    }
+    if (rect_matches.items.len != 0) return false;
 
     // Some shell registrations report a sentinel UID. Accept the fallback only
     // when exactly one distinct rectangle among the small legacy range answers.
@@ -343,8 +355,6 @@ pub fn iconRect(request: *const Request, output: *Rect) bool {
 
 fn collectPids(allocator: std.mem.Allocator, exe_path: []const u16, pids: *std.ArrayList(DWORD)) void {
     if (exe_path.len == 0) return;
-    const slash = std.mem.lastIndexOfScalar(u16, exe_path, '\\');
-    const wanted = if (slash) |index| exe_path[index + 1 ..] else exe_path;
     const snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == null or @intFromPtr(snapshot.?) == INVALID_HANDLE_VALUE) return;
     defer _ = CloseHandle(snapshot);
@@ -353,9 +363,21 @@ fn collectPids(allocator: std.mem.Allocator, exe_path: []const u16, pids: *std.A
     entry.size = @sizeOf(ProcessEntry32W);
     if (Process32FirstW(snapshot, &entry) == 0) return;
     while (true) {
-        if (wideEqualIgnoreCase(wideZSlice(&entry.exe_file), wanted)) pids.append(allocator, entry.process_id) catch return;
+        if (processImagePath(entry.process_id)) |path| {
+            if (wideEqualIgnoreCase(wideZSlice(&path), wideZSlice(exe_path))) pids.append(allocator, entry.process_id) catch return;
+        }
         if (Process32NextW(snapshot, &entry) == 0) break;
     }
+}
+
+fn processImagePath(process_id: DWORD) ?[512]u16 {
+    const process = OpenProcess(process_query_limited_information, 0, process_id) orelse return null;
+    defer _ = CloseHandle(process);
+    var path: [512]u16 = @splat(0);
+    var length: DWORD = @intCast(path.len);
+    if (QueryFullProcessImageNameW(process, 0, &path, &length) == 0 or length == 0) return null;
+    path[@min(length, @as(DWORD, @intCast(path.len - 1)))] = 0;
+    return path;
 }
 
 fn collectWindows(allocator: std.mem.Allocator, pids: []const DWORD, windows: *std.ArrayList(HWND)) void {
@@ -394,6 +416,13 @@ fn queryRect(identifier: *const NotifyIconIdentifier, output: *Rect) bool {
 
 fn sameRect(a: Rect, b: Rect) bool {
     return a.left == b.left and a.top == b.top and a.right == b.right and a.bottom == b.bottom;
+}
+
+pub fn uniqueRect(rects: []const Rect) ?Rect {
+    if (rects.len == 0) return null;
+    const first = rects[0];
+    for (rects[1..]) |rect| if (!sameRect(rect, first)) return null;
+    return first;
 }
 
 fn wideZSlice(value: []const u16) []const u16 {
@@ -670,4 +699,13 @@ pub fn smokeCheck() bool {
         indexOfRectNear(&rects, .{ .left = 91, .top = 20, .right = 121, .bottom = 50 }, 0) == null and
         std.mem.eql(u8, resultName(.found), "found it, and was asked not to press") and
         std.mem.eql(u8, resultName(.no_taskbar), "no taskbar");
+}
+
+test "legacy tray UID resolution refuses ambiguous process windows" {
+    const first = Rect{ .left = 10, .top = 20, .right = 30, .bottom = 40 };
+    const same = [_]Rect{ first, first };
+    const different = [_]Rect{ first, .{ .left = 50, .top = 20, .right = 70, .bottom = 40 } };
+    try std.testing.expectEqual(first, uniqueRect(&same).?);
+    try std.testing.expect(uniqueRect(&different) == null);
+    try std.testing.expect(uniqueRect(&.{}) == null);
 }

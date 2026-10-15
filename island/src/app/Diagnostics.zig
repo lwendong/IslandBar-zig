@@ -4,10 +4,11 @@ const Motion = @import("Motion");
 const StatePolicy = @import("StatePolicy");
 const CardLayout = @import("CardLayout");
 const IslandWindow = @import("IslandWindow");
-const Lyrics = @import("Lyrics");
+const Lyrics = @import("MusicLyrics");
+const LyricsService = @import("LyricsService");
 const MiniJson = @import("MiniJson");
 const Monitor = @import("Monitor");
-const MusicSession = @import("MusicSession");
+const MediaService = @import("MediaService");
 const Notification = @import("Notification");
 const Renderer = @import("Renderer");
 const TextRenderer = @import("TextRenderer");
@@ -70,6 +71,68 @@ const abs_autohide: isize = 0x00000001;
 const clr_invalid: u32 = 0xffffffff;
 
 pub const Check = struct { name: []const u8, passed: bool };
+
+pub const TraceRect = struct { left: f32 = 0, top: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
+
+/// Opt-in, allocation-free interaction trace. Coordinates are client-local DIPs.
+pub const UiTraceEvent = struct {
+    operation_id: u64 = 0,
+    element: []const u8 = "-",
+    element_index: i32 = -1,
+    layout_generation: u64 = 0,
+    action: []const u8 = "-",
+    result: []const u8 = "-",
+    hresult: i32 = 0,
+    state_revision: u64 = 0,
+    renderer_generation: u64 = 0,
+    frame_duration_ms: u64 = 0,
+    dpi: u32 = 96,
+    screen_origin_x_px: i32 = 0,
+    screen_origin_y_px: i32 = 0,
+    pixels_per_dip: f32 = 1,
+    bounds: TraceRect = .{},
+    hit_region: TraceRect = .{},
+    surface_clip: TraceRect = .{},
+    content_clip: TraceRect = .{},
+};
+
+pub fn formatUiTrace(output: []u8, event: UiTraceEvent) []const u8 {
+    return std.fmt.bufPrint(
+        output,
+        "ui-trace op={d} element={s}[{d}] layout={d} action={s} result={s} hresult=0x{x} state_rev={d} render_gen={d} frame_ms={d} dpi={d} coord=client_dip origin_px=({d},{d}) scale={d:.3} bounds=({d:.1},{d:.1},{d:.1},{d:.1}) hit=({d:.1},{d:.1},{d:.1},{d:.1}) surface_clip=({d:.1},{d:.1},{d:.1},{d:.1}) content_clip=({d:.1},{d:.1},{d:.1},{d:.1})",
+        .{
+            event.operation_id,       event.element,            event.element_index,      event.layout_generation,   event.action,            event.result,           @as(u32, @bitCast(event.hresult)), event.state_revision,      event.renderer_generation, event.frame_duration_ms, event.dpi,
+            event.screen_origin_x_px, event.screen_origin_y_px, event.pixels_per_dip,     event.bounds.left,         event.bounds.top,        event.bounds.right,     event.bounds.bottom,               event.hit_region.left,     event.hit_region.top,      event.hit_region.right,  event.hit_region.bottom,
+            event.surface_clip.left,  event.surface_clip.top,   event.surface_clip.right, event.surface_clip.bottom, event.content_clip.left, event.content_clip.top, event.content_clip.right,          event.content_clip.bottom,
+        },
+    ) catch "";
+}
+
+pub fn logUiTrace(enabled: bool, event: UiTraceEvent) void {
+    if (!enabled) return;
+    var buffer: [768]u8 = undefined;
+    const line = formatUiTrace(&buffer, event);
+    if (line.len != 0) Log.logLine(line);
+}
+
+test "UI trace includes operation, layout, result, coordinates and resource generations" {
+    var buffer: [768]u8 = undefined;
+    const line = formatUiTrace(&buffer, .{
+        .operation_id = 42,
+        .element = "slider",
+        .element_index = 3,
+        .layout_generation = 9,
+        .action = "adjust.drag",
+        .result = "queued",
+        .renderer_generation = 5,
+        .dpi = 144,
+    });
+    try std.testing.expect(std.mem.indexOf(u8, line, "op=42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "element=slider[3] layout=9") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "action=adjust.drag result=queued") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "render_gen=5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "dpi=144 coord=client_dip") != null);
+}
 
 fn geometryCheck() bool {
     const pill = Geometry.pillBox(0, 0, 1920, 0);
@@ -200,12 +263,12 @@ fn collectModuleChecks() [14]Check {
         .{ .name = "pointer state policy", .passed = pointerPolicyCheck() },
         .{ .name = "card layout", .passed = CardLayout.smokeCheck() },
         .{ .name = "lyrics parser and timeline", .passed = Lyrics.smokeCheck() },
-        .{ .name = "LRC worker", .passed = Lyrics.workerSmokeCheck() },
+        .{ .name = "LRC worker", .passed = LyricsService.workerSmokeCheck() },
         .{ .name = "image codec", .passed = WicImage.smokeCheck() },
         .{ .name = "accent colour", .passed = Theme.smokeCheck() },
         .{ .name = "JSON and notification parsing", .passed = MiniJson.smokeCheck() and Notification.smokeCheck() },
         .{ .name = "monitor metrics", .passed = Monitor.smokeCheck() },
-        .{ .name = "media timeline policy", .passed = MusicSession.smokeCheck() },
+        .{ .name = "media timeline policy", .passed = MediaService.smokeCheck() },
         .{ .name = "window and click-through", .passed = IslandWindow.smokeCheck() },
         .{ .name = "composition renderer", .passed = Renderer.smokeCheck() },
         .{ .name = "clock text layout", .passed = TextRenderer.smokeCheck() },

@@ -23,10 +23,7 @@ MODULE_PATTERN = re.compile(
 IMPORT_PATTERN = re.compile(r'@import\(\s*"([^"]+)"\s*\)')
 STANDARD_IMPORTS = {"std", "builtin", "root", "compiler_rt", "unwind", "options"}
 LEGACY_FEATURE_OWNERS = {
-    "Lyrics": "music", "MusicSession": "music", "SoundOutput": "sound",
-    "StartApps": "launcher", "StartMenu": "launcher",
-    "Notification": "notification", "NotificationIcon": "notification",
-    "ToastStore": "notification", "WeChatWatch": "notification",
+    "Notification": "notification",
     "Weather": "weather",
 }
 
@@ -74,7 +71,7 @@ def scan(root: Path) -> tuple[list[str], list[str]]:
     module_map = {name: Path(path) for name, path in MODULE_PATTERN.findall(build)}
     # A few modules (e.g. Setup) are injected at the composition root.
     explicit_injections = set(re.findall(r'\.addImport\(\s*"([^"]+)"', build))
-    if not module_map or "Renderer" not in module_map or "MusicSession" not in module_map:
+    if not module_map or "Renderer" not in module_map or "MediaService" not in module_map:
         raise ValueError("Cannot read the expected named source modules from build.zig")
     violations: set[str] = set()
     unresolved: set[str] = set()

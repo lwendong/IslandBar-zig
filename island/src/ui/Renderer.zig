@@ -2,13 +2,15 @@ const std = @import("std");
 const Geometry = @import("Geometry");
 const Motion = @import("Motion");
 const TextRenderer = @import("TextRenderer");
-const MusicSession = @import("MusicSession");
+const AppIcon = @import("AppIcon");
+const DrawLifecycle = @import("DrawLifecycle");
 const WicImage = @import("WicImage");
-const Notification = @import("Notification");
-const Weather = @import("Weather");
-const TaskStripLayout = @import("TaskStripLayout");
-const CardLayout = @import("CardLayout");
+const StatusLineWeather = @import("StatusLineWeather");
+const BarControlLayout = @import("BarControlLayout");
+const TaskbarPresentation = @import("TaskbarPresentation");
+const LayoutSnapshot = @import("LayoutSnapshot");
 const Theme = @import("Theme");
+const PagePainter = @import("PagePainter");
 
 const HResult = i32;
 const UINT = u32;
@@ -160,7 +162,13 @@ const bi_bitfields: u32 = 3;
 const di_normal: UINT = 3;
 const max_window_icons: usize = 64;
 
-const WindowIcon = struct { window: Handle = null, bitmap: Handle = null };
+const WindowIcon = struct {
+    window: Handle = null,
+    window_id: u64 = 0,
+    process_id: u32 = 0,
+    process_created_at: u64 = 0,
+    bitmap: Handle = null,
+};
 
 pub const ReadbackError = error{
     RendererNotInitialized,
@@ -222,9 +230,7 @@ fn comMethod(comptime T: type, object: *anyopaque, index: usize) T {
 }
 
 pub const max_task_buttons: usize = TextRenderer.task_button_count_max;
-pub const max_tray_menu_entries: usize = 6;
 
-pub const CardOwner = enum(i32) { none = 0, system_panel = 1, notification = 2, music = 3 };
 pub const PillAppearance = struct {
     box: Geometry.RoundedBox = .{ .rect = .{} },
     resting_pill: Geometry.RoundedBox = .{ .rect = .{} },
@@ -232,12 +238,7 @@ pub const PillAppearance = struct {
     surface_box: ?Geometry.RoundedBox = null,
     fill: [4]f32 = .{ 0.05, 0.05, 0.07, 0.92 },
     opacity: f32 = 1,
-    task_island: Geometry.RoundedBox = .{ .rect = .{} },
-    task_buttons: []const TextRenderer.TaskButton = &.{},
-    task_button_appear: []const f32 = &.{},
-    task_hovered_index: i32 = -1,
-    task_card_left_dip: f32 = 0,
-    task_card_width_dip: f32 = 0,
+    taskbar_view: ?*const TaskbarPresentation.View = null,
     start_hover: f32 = 0,
     start_open: bool = false,
     system_hover: f32 = 0,
@@ -245,52 +246,30 @@ pub const PillAppearance = struct {
     tray_visible: bool = false,
     tray_hover: f32 = 0,
     tray_open: bool = false,
-    music_text: []const u8 = &.{},
-    music_card: ?*const TextRenderer.MusicCardText = null,
-    notification: ?*const Notification.Notification = null,
-    card_notification: ?*const Notification.Notification = null,
-    notification_icon_pixels: ?[]const u8 = null,
-    notification_icon_width: i32 = 0,
-    notification_icon_height: i32 = 0,
-    notification_icon_revision: u64 = 0,
+    line_text: []const u8 = &.{},
+    line_text_mode: enum { scrolling, static } = .scrolling,
     call_up: bool = false,
     call_strip: TextRenderer.CallStripText = .{},
     fullscreen_app: bool = false,
     resting_state: Motion.IslandState = .collapsed,
     music_present: bool = false,
-    music_level: f32 = 0,
-    music_level_known: bool = false,
-    music_wave_phase: f32 = 0,
-    music_accent: Theme.Color = .{ .r = 0.40, .g = 0.80, .b = 0.95, .a = 1 },
     lyric_scroll_dip: f32 = 0,
     lyric_line_roll: f32 = 1,
     lyric_line_prev: []const u8 = &.{},
     lyric_line_prev_scroll_dip: f32 = 0,
-    status_sky: []const u16 = &.{},
-    status_temperature: []const u16 = &.{},
-    status_code: i32 = -1,
+    status_weather: StatusLineWeather.View = .{},
     status_strip_opacity: f32 = 0,
-    notification_card_box: ?Geometry.RoundedBox = null,
-    notification_card_reveal: f32 = 0,
+    content_card_painter: ?PagePainter.Painter = null,
+    content_card_box: ?Geometry.RoundedBox = null,
+    content_card_reveal: f32 = 0,
     system_panel: ?*const TextRenderer.SystemPanelText = null,
     system_panel_box: ?Geometry.RoundedBox = null,
     system_panel_reveal: f32 = 0,
-    tray_page_open: bool = false,
-    tray_page_title: ?[*:0]const u16 = null,
-    tray_page_icons: []const TextRenderer.TrayIcon = &.{},
-    tray_page_revision: u64 = 0,
-    tray_page_hovered_index: i32 = -1,
-    tray_menu_open: bool = false,
-    tray_menu_rows: [max_tray_menu_entries]Geometry.RectF = @splat(.{}),
-    tray_menu_row_count: usize = 0,
-    tray_menu_hovered: i32 = -1,
-    tray_menu_labels: [max_tray_menu_entries]?[*:0]const u16 = @splat(null),
-    start_page: ?*const TextRenderer.StartCardText = null,
-    start_page_box: ?Geometry.RoundedBox = null,
-    start_page_reveal: f32 = 0,
-    sound_page: ?*const TextRenderer.SoundPageText = null,
-    sound_page_box: ?Geometry.RoundedBox = null,
-    sound_page_reveal: f32 = 0,
+    feature_page_painter: ?PagePainter.Painter = null,
+    feature_page_box: ?Geometry.RoundedBox = null,
+    feature_page_reveal: f32 = 0,
+    feature_layout_snapshot: ?*const LayoutSnapshot.Snapshot = null,
+    feature_strip_painter: ?PagePainter.Painter = null,
 };
 pub const ContentStrengths = struct { bar: f32 = 1, card: f32 = 1 };
 pub const FrameState = struct {
@@ -298,13 +277,10 @@ pub const FrameState = struct {
     resting_pill: Geometry.RoundedBox = .{ .rect = .{} },
     outer_card_up: bool = false,
     fullscreen_app: bool = false,
-    card_owner: CardOwner = .none,
     state: Motion.IslandState = .collapsed,
     resting_state: Motion.IslandState = .collapsed,
     clock: TextRenderer.ClockStyle = .compact,
-    status_sky: ?[*:0]const u16 = null,
-    status_code: i32 = -1,
-    status_temperature: ?[*:0]const u16 = null,
+    status_weather: StatusLineWeather.View = .{},
     status_strip_opacity: f32 = 0,
     content_opacity: f32 = 1,
     card_opacity: f32 = 1,
@@ -315,12 +291,7 @@ pub const FrameState = struct {
     music_level_known: bool = false,
     music_wave_phase: f32 = 0,
     music_accent: [4]f32 = .{ 0.40, 0.80, 0.95, 1 },
-    notification: ?*const Notification.Notification = null,
-    notification_icon_pixels: ?[]const u8 = null,
-    notification_icon_width: i32 = 0,
-    notification_icon_height: i32 = 0,
-    notification_icon_revision: u64 = 0,
-    music: ?*const MusicSession.MusicInfo = null,
+    line_text_mode: enum { scrolling, static } = .scrolling,
     transport_glyph: ?[*:0]const u8 = null,
     progress_fraction: f32 = 0,
     music_position_ms: i64 = 0,
@@ -339,22 +310,8 @@ pub const FrameState = struct {
     task_button_appear_valid: bool = false,
     task_hovered_index: i32 = -1,
     task_button_windows: [max_task_buttons]?*anyopaque = @splat(null),
-    tray_icons: ?[]const TextRenderer.TrayIcon = null,
-    tray_icon_count: usize = 0,
-    tray_revision: u64 = 0,
-    tray_hovered_index: i32 = -1,
     tray_button_hovered: bool = false,
     tray_button_wash: f32 = 0,
-    tray_page_open: bool = false,
-    tray_page_title: ?[*:0]const u16 = null,
-    tray_menu_open: bool = false,
-    tray_menu_rows: [max_tray_menu_entries]Geometry.RectF = @splat(.{}),
-    tray_menu_row_count: usize = 0,
-    tray_menu_hovered: i32 = -1,
-    tray_menu_labels: [max_tray_menu_entries]?[*:0]const u16 = @splat(null),
-    start_card: TextRenderer.StartCardText = .{},
-    start_page_open: bool = false,
-    start_hovered: bool = false,
     start_wash: f32 = 0,
     system_button_hovered: bool = false,
     system_button_wash: f32 = 0,
@@ -362,8 +319,6 @@ pub const FrameState = struct {
     start_button_open: bool = false,
     system_panel_open: bool = false,
     system_panel: TextRenderer.SystemPanelText = .{},
-    sound_page_open: bool = false,
-    sound_page: TextRenderer.SoundPageText = .{},
     card_left_dip: f32 = 0,
     icon_pixels: ?[]const u8 = null,
     icon_width: i32 = 0,
@@ -381,6 +336,8 @@ pub const FrameState = struct {
 /// Swap-chain binding and draw submission are kept separate so each stage has
 /// explicit COM ownership and can be rebuilt after a device loss.
 pub const DeviceResources = struct {
+    fetch_app_icon_png: AppIcon.FetchPngFn = AppIcon.unavailable,
+    generation: u64 = 0,
     d3d_device: Handle = null,
     d3d_context: Handle = null,
     swap_chain: Handle = null,
@@ -567,7 +524,7 @@ pub const DeviceResources = struct {
     /// Presents one cleared composition frame containing the island's rounded
     /// surface. The back-buffer wrapper is released before Present, as required
     /// by DXGI's flip model and the original C++ renderer.
-    pub fn renderPill(self: *DeviceResources, pill: PillAppearance, text_renderer: ?*TextRenderer.TextRenderer, clock_style: TextRenderer.ClockStyle, weather_reading: Weather.Reading) bool {
+    pub fn renderPill(self: *DeviceResources, pill: PillAppearance, text_renderer: ?*TextRenderer.TextRenderer, clock_style: TextRenderer.ClockStyle) bool {
         last_render_pill_failure = "";
         last_render_pill_hresult = 0;
         if (!self.isReady() or !self.visual_bound) return false;
@@ -575,8 +532,12 @@ pub const DeviceResources = struct {
         var surface: Handle = null;
         const get_buffer = comMethod(*const fn (*anyopaque, UINT, *const Guid, *Handle) callconv(.winapi) HResult, self.swap_chain.?, 9);
         const surface_hr = get_buffer(self.swap_chain.?, 0, &iid_dxgi_surface, &surface);
-        if (!succeeded(surface_hr) or surface == null) return false;
         defer release(&surface);
+        if (!succeeded(surface_hr) or surface == null) {
+            last_render_pill_failure = "DXGI GetBuffer";
+            last_render_pill_hresult = surface_hr;
+            return false;
+        }
 
         const properties = BitmapProperties1{
             .pixel_format = .{ .format = dxgi_format_b8g8r8a8_unorm, .alpha_mode = d2d_alpha_mode_premultiplied },
@@ -588,30 +549,61 @@ pub const DeviceResources = struct {
         var target: Handle = null;
         const create_target = comMethod(*const fn (*anyopaque, *anyopaque, *const BitmapProperties1, *Handle) callconv(.winapi) HResult, self.d2d_context.?, 62);
         const bitmap_hr = create_target(self.d2d_context.?, surface.?, &properties, &target);
-        if (!succeeded(bitmap_hr) or target == null) return false;
         defer release(&target);
+        if (!succeeded(bitmap_hr) or target == null) {
+            last_render_pill_failure = "D2D CreateBitmapFromDxgiSurface";
+            last_render_pill_hresult = bitmap_hr;
+            return false;
+        }
 
         const set_target = comMethod(*const fn (*anyopaque, Handle) callconv(.winapi) void, self.d2d_context.?, 74);
         set_target(self.d2d_context.?, target);
-        var target_attached = true;
-        defer if (target_attached) set_target(self.d2d_context.?, null);
+        var draw_lifecycle = DrawLifecycle.DrawLifecycle{};
+        if (!draw_lifecycle.attachTarget()) {
+            set_target(self.d2d_context.?, null);
+            return false;
+        }
 
         if (!self.opacity_animated) {
             const effect_opacity = comMethod(*const fn (*anyopaque, f32) callconv(.winapi) HResult, self.effect_group.?, 4);
             const opacity_hr = effect_opacity(self.effect_group.?, pill.opacity);
-            if (!succeeded(opacity_hr)) return false;
+            if (!succeeded(opacity_hr)) {
+                last_render_pill_failure = "DirectComposition opacity";
+                last_render_pill_hresult = opacity_hr;
+                return false;
+            }
         }
 
         var fallback_brush: Handle = null;
+        defer release(&fallback_brush);
         if (text_renderer == null) {
             const color = D2DColor{ .r = pill.fill[0], .g = pill.fill[1], .b = pill.fill[2], .a = pill.fill[3] };
             const create_brush = comMethod(*const fn (*anyopaque, *const D2DColor, Handle, *Handle) callconv(.winapi) HResult, self.d2d_context.?, 8);
-            if (!succeeded(create_brush(self.d2d_context.?, &color, null, &fallback_brush)) or fallback_brush == null) return false;
+            const brush_hr = create_brush(self.d2d_context.?, &color, null, &fallback_brush);
+            if (!succeeded(brush_hr) or fallback_brush == null) {
+                last_render_pill_failure = "D2D CreateSolidColorBrush";
+                last_render_pill_hresult = brush_hr;
+                return false;
+            }
         }
-        defer release(&fallback_brush);
-
+        const end_draw = comMethod(*const fn (*anyopaque, ?*u64, ?*u64) callconv(.winapi) HResult, self.d2d_context.?, 49);
+        defer {
+            if (draw_lifecycle.stage == .drawing) {
+                const deferred_hr = end_draw(self.d2d_context.?, null, null);
+                _ = draw_lifecycle.finishDrawing(deferred_hr);
+                if (!succeeded(deferred_hr)) {
+                    if (last_render_pill_failure.len == 0) last_render_pill_failure = "D2D EndDraw";
+                    last_render_pill_hresult = deferred_hr;
+                }
+            }
+            if (draw_lifecycle.stage == .target_attached) {
+                set_target(self.d2d_context.?, null);
+                _ = draw_lifecycle.detachTarget();
+            }
+        }
         const begin_draw = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 48);
         begin_draw(self.d2d_context.?);
+        std.debug.assert(draw_lifecycle.beginDrawing());
         const clear = comMethod(*const fn (*anyopaque, *const D2DColor) callconv(.winapi) void, self.d2d_context.?, 47);
         const transparent = D2DColor{ .r = 0, .g = 0, .b = 0, .a = 0 };
         clear(self.d2d_context.?, &transparent);
@@ -635,33 +627,25 @@ pub const DeviceResources = struct {
             if (text_renderer) |text| {
                 if (pill.call_up) {
                     text.drawCallStrip(self.d2d_context, pill.box, pill.call_strip, pill.opacity);
-                } else if (pill.music_card) |music_card| {
-                    if (!text.drawMusicCard(self.d2d_context, pill.box, music_card, pill.opacity)) {
-                        last_render_pill_failure = "music card renderer";
-                        return false;
-                    }
-                } else if (pill.music_text.len != 0) {
-                    if (pill.notification != null) {
-                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.music_text, pill.opacity)) return false;
-                    } else if (!text.drawTrackLine(self.d2d_context, pill.box, pill.music_text, pill.lyric_scroll_dip, pill.opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) return false;
+                } else if (pill.line_text.len != 0) {
+                    if (pill.line_text_mode == .static) {
+                        if (!text.drawInlineText(self.d2d_context, pill.box, pill.line_text, pill.opacity)) return false;
+                    } else if (!text.drawScrollingLine(self.d2d_context, pill.box, pill.line_text, pill.lyric_scroll_dip, pill.opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip)) return false;
                 } else if (clock_style == .compact) {
-                    var sky: [24]u16 = @splat(0);
-                    var temperature: [16]u16 = @splat(0);
-                    var weather_code: i32 = -1;
-                    if (weather_reading.valid) {
-                        weather_code = weather_reading.weather_code;
-                        Weather.weatherPiecesFor(weather_reading.temperature_c, weather_code, &sky, &temperature);
-                    }
-                    if (!text.drawStatusLine(self.d2d_context, pill.box, pill.opacity, wideZSlice(&sky), wideZSlice(&temperature), weather_code)) return false;
+                    if (!text.drawStatusLine(self.d2d_context, pill.box, pill.opacity, pill.status_weather)) return false;
                 } else if (!text.drawClock(self.d2d_context, pill.box, clock_style, pill.opacity)) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and pill.music_present and pill.resting_state == .music_strip and pill.notification == null and !pill.call_up) {
+        if (pill.opacity > 0.001 and pill.music_present and pill.resting_state == .music_strip and pill.line_text_mode == .scrolling and !pill.call_up) {
             if (text_renderer) |text| {
                 const line_box = if (Geometry.width(pill.resting_pill.rect) > 0) pill.resting_pill else pill.box;
-                if (pill.music_level_known) text.drawAudioWave(self.d2d_context, line_box, pill.music_wave_phase, pill.music_level, pill.music_accent, pill.opacity);
-                if (pill.music_text.len != 0) _ = text.drawTrackLine(self.d2d_context, line_box, pill.music_text, pill.lyric_scroll_dip, pill.opacity, pill.lyric_line_roll, pill.lyric_line_prev, pill.lyric_line_prev_scroll_dip);
+                if (pill.feature_strip_painter) |painter| {
+                    if (!painter.paint_fn(painter.context, text, self.d2d_context, &line_box, pill.opacity, null)) {
+                        last_render_pill_failure = "feature strip renderer";
+                        return false;
+                    }
+                }
             }
         }
 
@@ -671,36 +655,25 @@ pub const DeviceResources = struct {
                     Motion.rowAnchorBox(pill.box, pill.resting_pill)
                 else
                     pill.box;
-                var strip = TaskStripLayout.statusStripFor(bar_island);
+                var strip = BarControlLayout.statusStripFor(bar_island);
                 const slide = (1 - pill.status_strip_opacity) * 6;
                 strip.rect.left += slide;
                 strip.rect.right += slide;
                 text.drawPillSurface(self.d2d_context, strip, strip, pill.status_strip_opacity * pill.opacity);
-                if (!text.drawStatusLine(self.d2d_context, strip, pill.status_strip_opacity * pill.opacity, pill.status_sky, pill.status_temperature, pill.status_code)) return false;
+                if (!text.drawStatusLine(self.d2d_context, strip, pill.status_strip_opacity * pill.opacity, pill.status_weather)) return false;
             }
         }
 
-        if (pill.opacity > 0.001 and (pill.card_notification != null or pill.notification != null) and pill.notification_card_box != null and pill.notification_card_reveal > 0.5) {
+        if (pill.opacity > 0.001 and pill.content_card_painter != null and pill.content_card_box != null and pill.content_card_reveal > 0.5) {
             if (text_renderer) |text| {
-                const notification = pill.card_notification orelse pill.notification.?;
-                const card = pill.notification_card_box.?;
-                const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.notification_card_reveal);
+                const card = pill.content_card_box.?;
+                const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.content_card_reveal);
                 const clip = D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = revealed_bottom };
                 const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
-                const drawn = text.drawNotification(
-                    self.d2d_context,
-                    card,
-                    std.mem.sliceTo(&notification.app, 0),
-                    std.mem.sliceTo(&notification.title, 0),
-                    std.mem.sliceTo(&notification.body, 0),
-                    pill.notification_icon_pixels,
-                    pill.notification_icon_width,
-                    pill.notification_icon_height,
-                    pill.notification_icon_revision,
-                    pill.opacity,
-                );
+                const painter = pill.content_card_painter.?;
+                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, pill.opacity, null);
                 pop_clip(self.d2d_context.?);
                 if (!drawn) return false;
             }
@@ -720,56 +693,19 @@ pub const DeviceResources = struct {
             }
         }
 
-        if (pill.opacity > 0.001 and pill.sound_page != null and pill.sound_page_box != null and pill.sound_page_reveal > 0.5) {
+        if (pill.opacity > 0.001 and pill.feature_page_painter != null and pill.feature_page_box != null and pill.feature_page_reveal > 0.5) {
             if (text_renderer) |text| {
-                const card = pill.sound_page_box.?;
-                const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.sound_page_reveal);
-                const clip = D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = revealed_bottom };
+                const card = pill.feature_page_box.?;
+                const fallback_revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.feature_page_reveal);
+                const clip = if (pill.feature_layout_snapshot) |snapshot| blk: {
+                    const bounds = snapshot.renderSurfaceClip();
+                    break :blk D2DRectF{ .left = bounds.left, .top = bounds.top, .right = bounds.right, .bottom = bounds.bottom };
+                } else D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = fallback_revealed_bottom };
                 const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
                 const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
                 push_clip(self.d2d_context.?, &clip, 0);
-                const drawn = text.drawSoundPage(self.d2d_context, card, pill.sound_page.?, pill.opacity);
-                pop_clip(self.d2d_context.?);
-                if (!drawn) return false;
-            }
-        }
-
-        if (pill.opacity > 0.001 and pill.tray_page_open and pill.system_panel_box != null and pill.system_panel_reveal > 0.5 and !pill.fullscreen_app) {
-            if (text_renderer) |text| {
-                const card = pill.system_panel_box.?;
-                const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.system_panel_reveal);
-                const clip = D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = revealed_bottom };
-                const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
-                const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
-                push_clip(self.d2d_context.?, &clip, 0);
-                const drawn = text.drawTrayPage(self.d2d_context, card, pill.tray_page_title, pill.tray_page_icons, pill.tray_page_revision, pill.tray_page_hovered_index, pill.opacity);
-                pop_clip(self.d2d_context.?);
-                if (!drawn) return false;
-            }
-        }
-
-        if (pill.opacity > 0.001 and pill.tray_menu_open) {
-            if (text_renderer) |text| {
-                const count = @min(pill.tray_menu_row_count, max_tray_menu_entries);
-                text.drawTrayMenu(
-                    self.d2d_context,
-                    pill.tray_menu_rows[0..count],
-                    pill.tray_menu_labels[0..count],
-                    pill.tray_menu_hovered,
-                    pill.opacity,
-                );
-            }
-        }
-
-        if (pill.opacity > 0.001 and pill.start_page != null and pill.start_page_box != null and pill.start_page_reveal > 0.5) {
-            if (text_renderer) |text| {
-                const card = pill.start_page_box.?;
-                const revealed_bottom = @min(card.rect.bottom, card.rect.top + pill.start_page_reveal);
-                const clip = D2DRectF{ .left = card.rect.left, .top = card.rect.top, .right = card.rect.right, .bottom = revealed_bottom };
-                const push_clip = comMethod(*const fn (*anyopaque, *const D2DRectF, i32) callconv(.winapi) void, self.d2d_context.?, 45);
-                const pop_clip = comMethod(*const fn (*anyopaque) callconv(.winapi) void, self.d2d_context.?, 46);
-                push_clip(self.d2d_context.?, &clip, 0);
-                const drawn = text.drawStartPage(self.d2d_context, card, pill.start_page.?, pill.opacity);
+                const painter = pill.feature_page_painter.?;
+                const drawn = painter.paint_fn(painter.context, text, self.d2d_context, &card, pill.opacity, pill.feature_layout_snapshot);
                 pop_clip(self.d2d_context.?);
                 if (!drawn) return false;
             }
@@ -778,24 +714,17 @@ pub const DeviceResources = struct {
         // The task row is drawn after the expanded card so its buttons stay
         // visible where the card overlaps the desktop strip, matching the
         // original Renderer::DrawDecks order.
-        if (pill.opacity > 0.001 and pill.task_buttons.len != 0 and !pill.fullscreen_app) {
+        if (pill.opacity > 0.001 and !pill.fullscreen_app) {
             if (text_renderer) |text| {
-                var resolved_buttons: [max_task_buttons]TextRenderer.TaskButton = @splat(.{});
-                const count = @min(pill.task_buttons.len, resolved_buttons.len);
-                @memcpy(resolved_buttons[0..count], pill.task_buttons[0..count]);
-                for (resolved_buttons[0..count]) |*button| {
-                    button.icon = self.iconForWindow(button.window);
+                if (pill.taskbar_view) |view| {
+                    var resolved_buttons = view.buttons;
+                    const count = @min(view.count, resolved_buttons.len);
+                    self.pruneWindowIconCache(resolved_buttons[0..count]);
+                    for (resolved_buttons[0..count]) |*button| {
+                        button.icon = self.iconForWindow(button.*);
+                    }
+                    if (!text.drawTaskIcons(self.d2d_context, resolved_buttons[0..count], pill.opacity)) return false;
                 }
-                if (!text.drawTaskIcons(
-                    self.d2d_context,
-                    pill.task_island,
-                    resolved_buttons[0..count],
-                    pill.task_hovered_index,
-                    pill.opacity,
-                    pill.task_button_appear,
-                    pill.task_card_left_dip,
-                    pill.task_card_width_dip,
-                )) return false;
             }
         }
 
@@ -811,11 +740,11 @@ pub const DeviceResources = struct {
             }
         }
 
-        const end_draw = comMethod(*const fn (*anyopaque, ?*u64, ?*u64) callconv(.winapi) HResult, self.d2d_context.?, 49);
         const draw_hr = end_draw(self.d2d_context.?, null, null);
+        const draw_succeeded = draw_lifecycle.finishDrawing(draw_hr);
         set_target(self.d2d_context.?, null);
-        target_attached = false;
-        if (!succeeded(draw_hr)) {
+        std.debug.assert(draw_lifecycle.detachTarget());
+        if (!draw_succeeded) {
             last_render_pill_failure = "D2D EndDraw";
             last_render_pill_hresult = draw_hr;
             return false;
@@ -1018,19 +947,30 @@ pub const DeviceResources = struct {
         var bitmap: Handle = null;
         const create = comMethod(*const fn (*anyopaque, D2DSizeU, ?[*]const u8, UINT, *const BitmapProperties1, *Handle) callconv(.winapi) HResult, context, 4);
         const stride = width * 4;
-        if (!succeeded(create(context, size, pixels, stride, &properties, &bitmap))) return null;
+        if (!succeeded(create(context, size, pixels, stride, &properties, &bitmap)) or bitmap == null) {
+            release(&bitmap);
+            return null;
+        }
         return bitmap;
     }
 
-    fn iconForWindow(self: *DeviceResources, window_arg: Handle) Handle {
-        const window = window_arg orelse return null;
+    fn iconForWindow(self: *DeviceResources, button: TextRenderer.TaskButton) Handle {
+        const window = button.window orelse return null;
+        if (button.window_id == 0 or button.process_id == 0 or button.process_created_at == 0) return null;
         for (self.window_icons[0..self.window_icon_count]) |slot| {
-            if (slot.window == window) return slot.bitmap;
+            if (slot.window == window and slot.window_id == button.window_id and
+                slot.process_id == button.process_id and slot.process_created_at == button.process_created_at) return slot.bitmap;
         }
         if (IsWindow(window) == 0 or self.window_icon_count >= self.window_icons.len) return null;
 
         const slot_index = self.window_icon_count;
-        self.window_icons[slot_index] = .{ .window = window, .bitmap = null };
+        self.window_icons[slot_index] = .{
+            .window = window,
+            .window_id = button.window_id,
+            .process_id = button.process_id,
+            .process_created_at = button.process_created_at,
+            .bitmap = null,
+        };
         self.window_icon_count += 1;
 
         // Prefer the icon supplied by the window itself, then its class icon,
@@ -1060,13 +1000,38 @@ pub const DeviceResources = struct {
         if (QueryFullProcessImageNameW(process, 0, &executable_path, &path_length) == 0 or path_length == 0 or path_length >= executable_path.len) return null;
 
         var png: [16 * 1024]u8 = undefined;
-        const png_length = MusicSession.fetchAppIconForTest(executable_path[0..path_length], &png);
+        const png_length = self.fetch_app_icon_png(executable_path[0..path_length], &png);
         if (png_length == 0) return null;
         var decoded = WicImage.DecodedImage{};
         if (!WicImage.decodeImage(png[0..png_length], &decoded, .other) or decoded.width <= 0 or decoded.height <= 0) return null;
         const pixels = decoded.pixels orelse return null;
         self.window_icons[slot_index].bitmap = self.createIconBitmap(@intCast(decoded.width), @intCast(decoded.height), pixels);
         return self.window_icons[slot_index].bitmap;
+    }
+
+    fn pruneWindowIconCache(self: *DeviceResources, buttons: []const TextRenderer.TaskButton) void {
+        var index: usize = 0;
+        while (index < self.window_icon_count) {
+            const slot = self.window_icons[index];
+            var retained = false;
+            for (buttons) |button| {
+                if (button.window == slot.window and button.window_id == slot.window_id and
+                    button.process_id == slot.process_id and button.process_created_at == slot.process_created_at)
+                {
+                    retained = true;
+                    break;
+                }
+            }
+            if (retained) {
+                index += 1;
+                continue;
+            }
+            var removed = self.window_icons[index];
+            release(&removed.bitmap);
+            self.window_icon_count -= 1;
+            self.window_icons[index] = self.window_icons[self.window_icon_count];
+            self.window_icons[self.window_icon_count] = .{};
+        }
     }
 
     fn bitmapFromWindowIcon(self: *DeviceResources, icon: Handle) Handle {
@@ -1101,6 +1066,7 @@ pub const DeviceResources = struct {
 
     pub fn initialize(self: *DeviceResources, window: Handle, width_px: UINT, height_px: UINT, scale_arg: f32) bool {
         self.shutdown();
+        self.generation +%= 1;
         self.scale = if (scale_arg > 0) scale_arg else 1;
         self.dpi = @intFromFloat(@round(self.scale * 96));
         if (!self.createDeviceResources() or !self.createSwapChain(width_px, height_px) or !self.bindToWindow(window, self.scale)) {
@@ -1117,6 +1083,11 @@ pub const DeviceResources = struct {
             self.d2d_device != null and self.d2d_context != null and self.effect_group != null;
     }
 
+    pub fn lastFailureIsDeviceLoss(self: *const DeviceResources) bool {
+        _ = self;
+        return DrawLifecycle.isDeviceLossHresult(last_render_pill_hresult);
+    }
+
     /// Starts a compositor-side linear opacity ramp, matching Renderer::AnimateOpacity.
     /// Once accepted, per-frame opacity writes are skipped until shutdown so they
     /// cannot overwrite the compositor animation.
@@ -1125,7 +1096,11 @@ pub const DeviceResources = struct {
 
         release(&self.opacity_animation);
         const create_animation = comMethod(*const fn (*anyopaque, *Handle) callconv(.winapi) HResult, self.composition_device.?, 25);
-        if (!succeeded(create_animation(self.composition_device.?, &self.opacity_animation)) or self.opacity_animation == null) return false;
+        const create_hr = create_animation(self.composition_device.?, &self.opacity_animation);
+        if (!succeeded(create_hr) or self.opacity_animation == null) {
+            release(&self.opacity_animation);
+            return false;
+        }
 
         const slope = (to - from) / @as(f32, @floatCast(seconds));
         const add_cubic = comMethod(*const fn (*anyopaque, f64, f32, f32, f32, f32) callconv(.winapi) HResult, self.opacity_animation.?, 5);
@@ -1194,6 +1169,54 @@ pub var last_native_check_hresult: HResult = 0;
 pub var last_render_pill_failure: []const u8 = "";
 pub var last_render_pill_hresult: HResult = 0;
 
+const NativeMediaCardContext = struct {
+    content: *const TextRenderer.MediaCardContent,
+    layout: TextRenderer.MediaCardLayout,
+};
+
+fn nativeCheckMediaCardLayout(box: Geometry.RoundedBox) TextRenderer.MediaCardLayout {
+    const pad: f32 = 16;
+    const bottom = box.rect.bottom - pad;
+    const control_top = bottom - 38;
+    const controls = Geometry.RectF{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = control_top, .bottom = bottom };
+    const group_width: f32 = 38 * 3 + 32 * 2;
+    const group_left = (box.rect.left + box.rect.right) * 0.5 - group_width * 0.5;
+    const previous = Geometry.RectF{ .left = group_left, .right = group_left + 38, .top = control_top, .bottom = bottom };
+    const play_pause = Geometry.RectF{ .left = previous.right + 32, .right = previous.right + 70, .top = control_top, .bottom = bottom };
+    const next = Geometry.RectF{ .left = play_pause.right + 32, .right = play_pause.right + 70, .top = control_top, .bottom = bottom };
+    const progress = Geometry.RectF{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = control_top - 14, .bottom = control_top - 10 };
+    const elapsed = Geometry.RectF{ .left = progress.left, .right = progress.left + 56, .top = progress.top - 20, .bottom = progress.top - 4 };
+    const app_row = Geometry.RectF{ .left = box.rect.left + pad, .right = box.rect.right - pad, .top = box.rect.top + pad, .bottom = box.rect.top + pad + 22 };
+    const app_icon_size: f32 = 22;
+    const icon_mid = (app_row.top + app_row.bottom) * 0.5;
+    const app_icon = Geometry.RectF{ .left = app_row.left, .right = app_row.left + app_icon_size, .top = icon_mid - app_icon_size * 0.5, .bottom = icon_mid + app_icon_size * 0.5 };
+    const artwork = Geometry.RectF{ .left = box.rect.left + pad, .right = box.rect.left + pad + 96, .top = app_row.bottom + 8, .bottom = app_row.bottom + 104 };
+    const title = Geometry.RectF{ .left = artwork.right + 18, .right = box.rect.right - pad, .top = artwork.top + 16, .bottom = artwork.top + 44 };
+    return .{
+        .art_background = box.rect,
+        .app_row = app_row,
+        .app_icon = app_icon,
+        .app_icon_size = app_icon_size,
+        .app_text = .{ .left = app_icon.right + 10, .right = app_row.right, .top = app_row.top, .bottom = app_row.bottom },
+        .artwork = artwork,
+        .title = title,
+        .subtitle = .{ .left = title.left, .right = title.right, .top = title.bottom + 2, .bottom = title.bottom + 22 },
+        .elapsed = elapsed,
+        .remaining = .{ .left = progress.right - 56, .right = progress.right, .top = elapsed.top, .bottom = elapsed.bottom },
+        .progress = progress,
+        .controls = controls,
+        .previous = previous,
+        .play_pause = play_pause,
+        .next = next,
+    };
+}
+
+fn paintNativeMediaCard(raw_context: ?*anyopaque, backend: *TextRenderer.TextRenderer, draw_context: ?*anyopaque, box: *const Geometry.RoundedBox, opacity: f32, _: ?*const LayoutSnapshot.Snapshot) callconv(.c) bool {
+    const raw = raw_context orelse return false;
+    const context: *NativeMediaCardContext = @ptrCast(@alignCast(raw));
+    return backend.drawMediaCard(draw_context, box.*, context.layout, context.content, opacity);
+}
+
 /// Exercises the full device + swap-chain + composition binding path against an
 /// existing HWND. The caller owns the window and must keep it alive until this
 /// function returns.
@@ -1215,8 +1238,8 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
     if (!resources.isReady()) return false;
     if (clock_style != .compact) {
         check_stage = "initial card frame";
-        if (!resources.renderPill(pill, text_renderer, clock_style, .{ .temperature_c = 0, .weather_code = -1 })) return false;
-        if (!resources.renderPill(pill, text_renderer, clock_style, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+        if (!resources.renderPill(pill, text_renderer, clock_style)) return false;
+        if (!resources.renderPill(pill, text_renderer, clock_style)) return false;
         check_stage = "initial card readback";
         if (!verifySurfaceReadback(&resources)) return false;
         if (text_renderer) |text| {
@@ -1238,7 +1261,7 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
                 WicImage.makeBlurredBackgroundPng(artwork_png[0..artwork_png_len], 105, 59, &background_png)
             else
                 0;
-            var music_card = TextRenderer.MusicCardText{
+            var music_card = TextRenderer.MediaCardContent{
                 .title = "Zig migration rendering test",
                 .artist = "IslandBar",
                 .album = "Direct2D readback",
@@ -1253,10 +1276,16 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
                 .background_revision = if (background_png_len > 0) 1 else 0,
             };
             var card_pill = pill;
-            card_pill.music_card = &music_card;
+            var media_context = NativeMediaCardContext{
+                .content = &music_card,
+                .layout = nativeCheckMediaCardLayout(card_pill.box),
+            };
+            card_pill.feature_page_painter = .{ .context = @ptrCast(&media_context), .paint_fn = paintNativeMediaCard };
+            card_pill.feature_page_box = card_pill.box;
+            card_pill.feature_page_reveal = Geometry.height(card_pill.box.rect);
             last_background_png_length = background_png_len;
             check_stage = "card artwork rendering";
-            if (!resources.renderPill(card_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) {
+            if (!resources.renderPill(card_pill, text, .card)) {
                 check_stage = if (last_render_pill_failure.len > 0) last_render_pill_failure else "card frame rendering";
                 last_native_check_hresult = last_render_pill_hresult;
                 return false;
@@ -1269,7 +1298,7 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
                 last_native_check_hresult = text.last_png_bitmap_hresult;
                 return false;
             }
-            if (!resources.renderPill(card_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(card_pill, text, .card)) return false;
             check_stage = "card artwork readback";
             if (!verifySurfaceReadback(&resources)) return false;
             check_stage = "rounded card clipping";
@@ -1291,11 +1320,11 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
             music_card.background_png = &.{};
             music_card.background_revision = 0;
             check_stage = "background-free card rendering";
-            if (!resources.renderPill(card_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(card_pill, text, .card)) return false;
             // The composition swap chain is flip-sequential with two buffers.
             // Replace both before reading buffer 0, or it may still contain the
             // preceding frame with the background image.
-            if (!resources.renderPill(card_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(card_pill, text, .card)) return false;
             check_stage = "background-free pixel readback";
             const without_background = resources.regionLuminance(background_region) catch return false;
             last_background_luminance_with = with_background;
@@ -1306,9 +1335,9 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
             music_card.background_png = background_png[0..background_png_len];
             music_card.background_revision = 1;
             check_stage = "card text rendering";
-            if (!resources.renderPill(card_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(card_pill, text, .card)) return false;
 
-            const layout = CardLayout.musicCardFor(card_pill.box);
+            const layout = media_context.layout;
             const title_region = Geometry.RectF{
                 .left = layout.title.left,
                 .top = layout.title.top,
@@ -1332,20 +1361,21 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
             };
             const task_title: [*:0]const u16 = &task_title_storage;
             var task_buttons = [_]TextRenderer.TaskButton{
-                .{ .title = task_title, .active = true, .hover_amount = 1 },
+                .{ .window_id = 1, .title = task_title, .active = true, .hover_amount = 1 },
             };
-            const task_appear = [_]f32{1};
             var task_pill = card_pill;
-            const task_island = TaskStripLayout.islandBoxFor(@floatFromInt(width_px), 220, 36);
-            task_pill.task_island = task_island;
-            task_pill.task_buttons = &task_buttons;
-            task_pill.task_button_appear = &task_appear;
-            task_pill.task_hovered_index = 0;
+            const task_island = Motion.boxForState(.collapsed, Motion.anchorForWindow(0, 0, @floatFromInt(width_px), 0));
+            var task_view = TaskbarPresentation.View{};
+            task_view.count = 1;
+            task_view.buttons[0] = task_buttons[0];
+            task_view.buttons[0].bounds = .{ .left = task_island.rect.right + 8, .top = task_island.rect.top + 3, .right = task_island.rect.right + 132, .bottom = task_island.rect.bottom - 3 };
+            task_view.buttons[0].icon_bounds = .{ .left = task_view.buttons[0].bounds.left + 5, .top = task_island.rect.top + 8, .right = task_view.buttons[0].bounds.left + 25, .bottom = task_island.rect.top + 28 };
+            task_view.buttons[0].title_bounds = .{ .left = task_view.buttons[0].icon_bounds.right + 8, .top = task_view.buttons[0].bounds.top, .right = task_view.buttons[0].bounds.right - 8, .bottom = task_view.buttons[0].bounds.bottom };
+            task_pill.taskbar_view = &task_view;
             check_stage = "task title rendering";
-            if (!resources.renderPill(task_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(task_pill, text, .card)) return false;
 
-            const task_amounts = [_]f32{1};
-            const task_title_box = TaskStripLayout.taskTitleAtAmounts(task_island, 0, 1, &task_amounts, 0, 0, @floatFromInt(width_px));
+            const task_title_box = task_view.buttons[0].title_bounds;
             const task_text_region = Geometry.RectF{
                 .left = task_title_box.left,
                 .top = task_title_box.top,
@@ -1364,7 +1394,7 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
 
             task_buttons[0].active = false;
             check_stage = "inactive task title rendering";
-            if (!resources.renderPill(task_pill, text, .card, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+            if (!resources.renderPill(task_pill, text, .card)) return false;
             const inactive_text_luminance = resources.regionLuminance(task_text_region) catch return false;
             const inactive_blank_luminance = resources.regionLuminance(task_blank_region) catch return false;
             if (inactive_text_luminance <= inactive_blank_luminance) return false;
@@ -1372,7 +1402,7 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
         check_stage = "compositor opacity animation";
         if (!resources.animateOpacity(0, 1, 0.15)) return false;
         check_stage = "final card frame";
-        if (!resources.renderPill(pill, text_renderer, clock_style, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+        if (!resources.renderPill(pill, text_renderer, clock_style)) return false;
         if (!verifySurfaceReadback(&resources)) return false;
         check_stage = "compositor clock wait";
         if (!resources.waitForCompositorClock(50)) return false;
@@ -1380,34 +1410,36 @@ pub fn nativeWindowCheck(window: Handle, width_px: UINT, height_px: UINT, scale:
         return true;
     }
     check_stage = "compact weather frames";
-    for ([_]i32{ 0, 2, 3, 45, 61, 73, 95 }) |weather_code| {
-        if (!resources.renderPill(pill, text_renderer, clock_style, .{ .temperature_c = 18.4, .weather_code = weather_code, .valid = true })) return false;
+    for ([_]StatusLineWeather.Mark{ .sun, .sun_cloud, .cloud, .fog, .rain, .snow, .thunder }) |mark| {
+        var weather_view = StatusLineWeather.View{ .mark = mark };
+        @memcpy(weather_view.sky[0..2], &[_]u16{ 0x6679, 0x5929 });
+        @memcpy(weather_view.temperature[0..3], &[_]u16{ '1', '8', 0x00b0 });
+        var weather_pill = pill;
+        weather_pill.status_weather = weather_view;
+        if (!resources.renderPill(weather_pill, text_renderer, clock_style)) return false;
     }
     if (text_renderer) |text| {
         var music_pill = pill;
         music_pill.resting_pill = pill.box;
         music_pill.resting_state = .music_strip;
         music_pill.music_present = true;
-        music_pill.music_text = "歌词滚动与波形测试这是一段更长的测试文本";
+        music_pill.line_text = "歌词滚动与波形测试这是一段更长的测试文本";
         music_pill.lyric_line_prev = "上一句歌词";
         music_pill.lyric_line_roll = 0.45;
         music_pill.lyric_scroll_dip = 160;
         music_pill.lyric_line_prev_scroll_dip = 60;
-        music_pill.music_level = 0.42;
-        music_pill.music_level_known = true;
-        music_pill.music_wave_phase = 0.8;
-        music_pill.music_accent = Theme.currentTheme().accent;
-        music_pill.status_sky = &.{ 0x6679, 0x5929 };
-        music_pill.status_temperature = &.{ '2', '1', 0x00b0 };
-        music_pill.status_code = 3;
+        var music_weather = StatusLineWeather.View{ .mark = .cloud };
+        @memcpy(music_weather.sky[0..2], &[_]u16{ 0x6679, 0x5929 });
+        @memcpy(music_weather.temperature[0..3], &[_]u16{ '2', '1', 0x00b0 });
+        music_pill.status_weather = music_weather;
         music_pill.status_strip_opacity = 0.8;
         check_stage = "music strip rendering";
-        if (!resources.renderPill(music_pill, text, .compact, .{ .temperature_c = 18.4, .weather_code = 3, .valid = true })) return false;
+        if (!resources.renderPill(music_pill, text, .compact)) return false;
 
         music_pill.call_up = true;
         music_pill.call_strip = .{ .seconds = 73, .level = 0.6, .level_known = true };
         check_stage = "call strip rendering";
-        if (!resources.renderPill(music_pill, text, .compact, .{ .temperature_c = 0, .weather_code = -1 })) return false;
+        if (!resources.renderPill(music_pill, text, .compact)) return false;
     }
     check_stage = "compact surface readback";
     check_passed = verifySurfaceReadback(&resources);
@@ -1461,15 +1493,6 @@ fn samplePixel(frame: *const MappedFrame, point: PixelPoint, alpha: ?*u8, rgb: ?
     if (rgb) |output| output.* = .{ bgra[2], bgra[1], bgra[0] };
 }
 
-pub fn nextCardOwner(current: CardOwner, card_up: bool, card_wanted: bool, panel_requested: bool, notification_active: bool, music_present: bool) CardOwner {
-    if (!card_up) return .none;
-    if (!card_wanted) return current;
-    if (panel_requested) return .system_panel;
-    if (notification_active) return .notification;
-    if (music_present) return .music;
-    return current;
-}
-
 pub fn contentStrengthsFor(card_up: bool, eased_progress_arg: f32, opening: bool) ContentStrengths {
     var result = ContentStrengths{};
     if (!card_up) return result;
@@ -1490,9 +1513,6 @@ pub fn smokeCheck() bool {
     defer resources.shutdown();
     if (!resources.createSwapChain(220, 36)) return false;
     return resources.swap_chain != null and resources.surface_width > 0 and resources.surface_height > 0 and
-        nextCardOwner(.music, true, true, true, true, true) == .system_panel and
-        nextCardOwner(.music, true, false, false, false, false) == .music and
-        nextCardOwner(.music, false, true, false, false, false) == .none and
         contentStrengthsFor(true, 0, true).card == 0.35 and
         contentStrengthsFor(true, 0.35, true).card == 0.35 and
         contentStrengthsFor(true, 1, true).card == 1 and

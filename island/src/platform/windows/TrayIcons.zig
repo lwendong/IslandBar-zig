@@ -1,4 +1,5 @@
 const std = @import("std");
+const TrayCatalog = @import("TrayCatalog");
 
 const HANDLE = ?*anyopaque;
 const HKEY = HANDLE;
@@ -30,19 +31,10 @@ const ProcessEntry32W = extern struct {
     flags: DWORD,
     exe_file: [max_name]u16,
 };
-const Guid = extern struct { data1: u32, data2: u16, data3: u16, data4: [8]u8 };
-const IconInfo = struct {
-    name: [96]u16 = @splat(0),
-    png: []const u8 = &.{},
-    promoted: bool = false,
-    uid: DWORD = 0,
-    has_uid: bool = false,
-    has_guid: bool = false,
-    guid: Guid = std.mem.zeroes(Guid),
-};
+const Guid = TrayCatalog.Guid;
+pub const IconInfo = TrayCatalog.Icon;
 const Entry = struct {
     icon: IconInfo = .{},
-    exe_path: [512]u16 = @splat(0),
     written_at: u64 = 0,
     png_storage: []u8 = &.{},
 };
@@ -182,7 +174,12 @@ fn copyWide(out: []u16, input: []const u16) void {
 }
 
 fn sameEntry(a: *const Entry, b: *const Entry) bool {
-    return equalWideIgnoreCase(&a.icon.name, &b.icon.name) and a.png_storage.len == b.png_storage.len and std.mem.eql(u8, a.png_storage, b.png_storage);
+    return equalWideIgnoreCase(&a.icon.name, &b.icon.name) and
+        equalWideIgnoreCase(&a.icon.exe_path, &b.icon.exe_path) and
+        a.icon.uid == b.icon.uid and a.icon.has_uid == b.icon.has_uid and
+        a.icon.has_guid == b.icon.has_guid and std.meta.eql(a.icon.guid, b.icon.guid) and
+        a.icon.promoted == b.icon.promoted and a.written_at == b.written_at and
+        a.png_storage.len == b.png_storage.len and std.mem.eql(u8, a.png_storage, b.png_storage);
 }
 
 pub const TrayIcons = struct {
@@ -211,7 +208,7 @@ pub const TrayIcons = struct {
 
     pub fn exePathAt(self: *const TrayIcons, index: usize) ?[]const u16 {
         if (index >= self.entries.items.len) return null;
-        return wideSlice(&self.entries.items[index].exe_path);
+        return wideSlice(&self.entries.items[index].icon.exe_path);
     }
 
     pub fn getRevision(self: *const TrayIcons) u64 {
@@ -262,7 +259,7 @@ pub const TrayIcons = struct {
             if (RegOpenKeyExW(root, @ptrCast(&subkey_name), 0, ACCESS_READ, &subkey) != ERROR_SUCCESS) continue;
             self.examined += 1;
             var entry = Entry{};
-            readStringValue(subkey, value_executable, &entry.exe_path);
+            readStringValue(subkey, value_executable, &entry.icon.exe_path);
             if (readBinaryValue(allocator, subkey, value_snapshot)) |png| entry.png_storage = png;
             var promoted: DWORD = 0;
             var size = @as(DWORD, @sizeOf(DWORD));
@@ -287,7 +284,7 @@ pub const TrayIcons = struct {
             _ = RegCloseKey(subkey);
 
             const png = entry.png_storage;
-            if (png.len < 8 or png[0] != 0x89 or png[1] != 0x50 or !keyIsRunning(running.items, &entry.exe_path)) {
+            if (png.len < 8 or png[0] != 0x89 or png[1] != 0x50 or !keyIsRunning(running.items, &entry.icon.exe_path)) {
                 allocator.free(entry.png_storage);
                 continue;
             }
@@ -297,7 +294,7 @@ pub const TrayIcons = struct {
                 readStringValue(subkey, value_tooltip, &tooltip);
                 _ = RegCloseKey(subkey);
             }
-            if (wideSlice(&tooltip).len == 0) copyWide(&tooltip, basename(&entry.exe_path));
+            if (wideSlice(&tooltip).len == 0) copyWide(&tooltip, basename(&entry.icon.exe_path));
             copyWide(&entry.icon.name, &tooltip);
             entry.icon.png = entry.png_storage;
             entry.written_at = keyLastWriteTime(&subkey_name);
